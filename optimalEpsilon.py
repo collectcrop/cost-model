@@ -4,7 +4,7 @@ import numpy as np
 from scipy.optimize import brentq  # 用于解非线性方程
 from scipy.special import zeta     # Riemann zeta 函数
 
-alpha = 1
+alpha = 0.8
 def zipf_popularity(N, alpha):
     norm_const = sum(1 / (i ** alpha) for i in range(1, N + 1))
     return np.array([1 / (i ** alpha) / norm_const for i in range(1, N + 1)])
@@ -19,6 +19,17 @@ def che_characteristic_time(qs, C):
 def che_hit_rates(qs, t_C):
     return 1 - np.exp(-qs * t_C)
 
+def predict_height_segments(epsilon,epsilon_i,n,k):
+    h = 1
+    num = math.ceil(n/(k*epsilon**2))
+    segments = num
+    while (num>1):
+        h = h+1
+        num = math.ceil(num/(k*epsilon_i**2))
+        segments += num
+    return h,segments            # 1+math.ceil(math.log(n/(k*epsilon**2),k*epsilon_i**2))
+
+
 # def expected_DAC(epsilon, ipp):
 #     dac = 0
 #     for k in range(ipp + 1):
@@ -27,6 +38,9 @@ def che_hit_rates(qs, t_C):
 #     return dac / ipp
 
 def expected_DAC(epsilon, ipp):
+    return 1 + (2*epsilon/ipp)
+
+def expected_IAC(epsilon, ipp):
     return 1 + (2*epsilon/ipp)
 
 def uniform_ratio(C,N):
@@ -38,6 +52,14 @@ def zipf_ratio(C,N,alpha):
     hit_rates = che_hit_rates(qs, t_C)
     return np.sum(qs * hit_rates)
 
+def validate_ratio(ratio):
+    if ratio >= 1.0:
+        h = 1.0
+    elif ratio <= 0:
+        h = 0.0
+    else:
+        h = ratio
+    return h
 def cost_function(epsilon, n, seg_size, M, ipp, ps,type="uniform"):
     M_index = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
@@ -51,23 +73,40 @@ def cost_function(epsilon, n, seg_size, M, ipp, ps,type="uniform"):
         elif type == "zipf":
             buffer_ratio = zipf_ratio(C, total_pages,alpha)
         
-        # print("epsilon: ",epsilon,"ratio",buffer_ratio)
-        if buffer_ratio >= 1.0:
-            h = 1.0
-        elif buffer_ratio <= 0:
-            h = 0.0
-        else:
-            h = buffer_ratio
+        h = validate_ratio(buffer_ratio)
 
     return (1 - h) * expected_DAC(epsilon, ipp)
+
+def cost_function_variant(epsilon, epsilon_i, n, M, ipp, ps,type="uniform",factor=0.01,indexalpha=1):
+    M_index = factor * M
+    M_buffer = M - M_index
+    C = M_buffer/ps
+    C_ = M_index/ps
+    segments = int(n / (2*epsilon))
+    data_total_pages = math.ceil(n / ipp)
+    index_total_pages = math.ceil(segments / ipp)
+    if (C==0.0):        #data part
+        h = 0.0
+    else:
+        if type == "uniform":
+            buffer_ratio = uniform_ratio(C, data_total_pages)
+        elif type == "zipf":
+            buffer_ratio = zipf_ratio(C, data_total_pages,alpha)
+        h = validate_ratio(buffer_ratio)
+    if (C_==0.0):       #index part
+        h_ = 0.0
+    else:
+        buffer_ratio_ = zipf_ratio(C_, index_total_pages,indexalpha)
+        h_ = validate_ratio(buffer_ratio_)
+    return (1 - h) * expected_DAC(epsilon, ipp) + (1 - h_) * expected_IAC(epsilon_i, ipp)
 
 def test_M():
     n = 1000000
     seg_size = 16  # bytes per segment
     ps = 4096       # page size in bytes
     ipp = ps // 16   # 假设每个 item 是 16 bytes
-    # M = 10 * 1024 * 1024  # 10MB memory budget
-    M_values = [1e5, 5e5, 1e6, 5e6, 1e7, 1.5e7]
+    M = 4 * 1024 * 1024  # 10MB memory budget
+    M_values = [M]
 
     eps_list = []
     cost_list = []
@@ -80,8 +119,8 @@ def test_M():
         print(f"least_eps: {least_eps}")
         eps_list.clear()
         cost_list.clear()
-        for eps in range(least_eps, 256):
-            cost = cost_function(eps, n, seg_size, M, ipp, ps)
+        for eps in range(least_eps, 64):
+            cost = cost_function(eps, n, seg_size, M, ipp, ps, "zipf")
             eps_list.append(eps)
             cost_list.append(cost)
         plt.plot(eps_list, cost_list, label=f'M={M/1e6}MB')
@@ -129,6 +168,20 @@ def test_n():
     plt.tight_layout()
     plt.show()
 
+def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",mode="mixed"):
+    eps_list = []
+    cost_list = []
+    least_eps = math.ceil(n*seg_size/(2*M))
+    for eps in range(least_eps, 65):
+        if mode == "mixed":
+            cost = cost_function(eps, n, seg_size, M, ipp, ps, type)
+        else:
+            cost = cost_function_variant(eps, n, seg_size, M, ipp, ps, type)
+        eps_list.append(eps)
+        cost_list.append(cost)
+        
+    return eps_list, cost_list
+
 
 def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
     best_cost = float('inf')
@@ -149,6 +202,12 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
 def main():
     M = 4*1024*1024
     getOptimalEpsilon(ipp=256,seg_size=16,M=M,n=1000000,ps=4096,type="zipf")
+    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=256,seg_size=16,M=M,n=1000000,ps=4096,type="zipf")
+    print(eps_list)
+    print(cost_list)
+    # for epsilon in range(2,65):
+    #     height,segments = predict_height_segments(epsilon,4,1000000,1)
+    #     print(f"epsilon: {epsilon}, predict height: {height}, segments: {segments} ")
     
 if __name__ == "__main__":
     main()

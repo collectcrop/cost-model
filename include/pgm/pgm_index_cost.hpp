@@ -16,6 +16,9 @@
 #pragma once
 
 #include "piecewise_linear_model.hpp"
+#include "cache/FIFOCache.hpp"
+#include "cache/LRUCache.hpp"
+#include "cache/LFUCache.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -34,8 +37,12 @@
 #include <memory>
 #include <list>
 #include <iostream>
-namespace pgm {
+#include <chrono>
 
+using timer = std::chrono::high_resolution_clock;
+
+namespace pgm {
+using ::Page;
 #define PGM_SUB_EPS(x, epsilon) ((x) <= (epsilon) ? 0 : ((x) - (epsilon)))
 #define PGM_ADD_EPS(x, epsilon, size) ((x) + (epsilon) + 2 >= (size) ? (size) : (x) + (epsilon) + 2)
 #define PAGE_SIZE 4096
@@ -53,11 +60,6 @@ struct ApproxPos {
     size_t hi;  ///< The upper bound of the range.
 };
 
-struct Page{
-    std::unique_ptr<char[]> data;
-    size_t valid_len=0;
-};
-
 struct ApproxPosExt {
     std::vector<char> buffer;
     size_t lo;      // minimal pos in buffer
@@ -69,6 +71,11 @@ typedef enum CacheType {
     DATA            // cache for data
 } CacheType;
 
+typedef enum CacheStrategy {
+    LRU,
+    LFU,
+    FIFO
+} CacheStrategy;
 
 /**
  * A space-efficient index that enables fast search operations on a sorted sequence of numbers.
@@ -91,7 +98,8 @@ typedef enum CacheType {
  * @tparam EpsilonRecursive controls the size of the search range in the internal structure
  * @tparam Floating the floating-point type to use for slopes
  */
-template<typename K, size_t Epsilon = 64, size_t MemoryBudget=1<<23, size_t EpsilonRecursive = 4, typename Floating = float>
+template<typename K, size_t Epsilon = 64, size_t MemoryBudget=1<<23, CacheStrategy strategy = LRU ,CacheType type = DATA,
+    size_t EpsilonRecursive = 4, typename Floating = float>
 class PGMIndex {
 protected:
     template<typename, size_t, size_t, uint8_t, typename>
@@ -109,86 +117,6 @@ protected:
     std::vector<size_t> levels_offsets; ///< The starting position of each level in segments[], in reverse order.
     int data_fd = -1;
     int seg_fd = -1;
-    size_t cache_misses = 0;
-    size_t cache_hits = 0;
-    CacheType type;
-
-    // Buffered Cache(LRU)
-    class PageCacheImpl {
-        size_t C;       // Number of buffered pages
-        size_t cnt;     // current number of buffered pages
-        int fd;   
-        PGMIndex* parent; 
-        using LRUIter = std::list<size_t>::iterator;
-
-        struct CacheEntry {
-            Page page;
-            LRUIter lru_pos;
-        };
-
-        std::unordered_map<size_t,CacheEntry> cache;        // data cache
-        std::list<size_t> lru;
-
-        public:
-        /**
-         * Construct a cache with a given size.
-         * @param p the parent index
-         * @param C the size of the cache in number of pages
-         * @param fd the file descriptor of the data file
-         * @param n the number of elements in the index
-         */
-        explicit PageCacheImpl(PGMIndex* p,size_t C, int fd, size_t n)
-            : parent(p),
-            C(C),
-            fd(fd),cnt(0) {
-            }
-
-        /**
-         * Get segments in a page from the cache.
-         * @param index the index of the page to retrieve
-         *
-         */
-        Page& get(size_t index) {
-            auto it = cache.find(index);
-            if (it != cache.end()) {
-                // Cache hit
-                parent->cache_hits++;
-                lru.erase(it->second.lru_pos);
-                lru.push_front(index);
-                it->second.lru_pos = lru.begin();
-                return it->second.page;
-            }
-            parent->cache_misses++;
-            // Evict if full
-            if (cnt >= C) {
-                size_t old = lru.back();
-                lru.pop_back();
-                cache.erase(old);
-                cnt--;
-            }
-
-
-            // Not found, load from disk
-            Page p;
-            p.data = std::make_unique<char[]>(PAGE_SIZE);
-            off_t offset = index * PAGE_SIZE;
-            ssize_t bytes = pread(fd, p.data.get(), PAGE_SIZE, offset);
-            if (bytes < 0){
-                throw std::runtime_error("Failed to read data from disk at offset " + std::to_string(offset));
-            }
-            p.valid_len = bytes;
-
-            // Insert new page
-            lru.push_front(index);
-            cache[index] = CacheEntry{std::move(p), lru.begin()};
-            cnt ++;
-            return cache[index].page;    
-        }
-    };
-
-    using PageCache = PageCacheImpl;
-    // mutable PageCache cache;
-    mutable std::unique_ptr<PageCache> cache,seg_cache;
     
     /// Sentinel value to avoid bounds checking.
     static constexpr K sentinel = std::numeric_limits<K>::has_infinity ? std::numeric_limits<K>::infinity()
@@ -301,8 +229,9 @@ protected:
         size_t seg_id = *(levels_offsets.end() - 2);  // root segment index
 
         Segment* seg = get_segment_ptr(seg_id);
-        Segment* next = get_segment_ptr(seg_id + 1);
+        Segment* next;
         while (true) {
+            next = get_segment_ptr(seg_id + 1);
             size_t pos = std::min<size_t>((*seg)(key), next->intercept);
 
             size_t level_start = levels_offsets[level];
@@ -343,6 +272,9 @@ protected:
 public:
 
     static constexpr size_t epsilon_value = Epsilon;
+    // mutable PageCache cache;
+    // mutable std::unique_ptr<PageCache> cache,seg_cache;
+    mutable std::unique_ptr<ICache<size_t, pgm::Page>> cache,seg_cache;
 
     /**
      * Constructs an empty index.
@@ -353,34 +285,50 @@ public:
      * Constructs the index on the given sorted vector.
      * @param data the vector of keys to be indexed, must be sorted
      */
-    explicit PGMIndex(const std::vector<K> &data) : PGMIndex(data.begin(), data.end()) {}
+    explicit PGMIndex(const std::vector<K> &data, double factor=0.01) : PGMIndex(data.begin(), data.end(),factor) {}
 
     /**
      * Constructs the index on the sorted keys in the range [first, last).
      * @param first, last the range containing the sorted keys to be indexed
      */
     template<typename RandomIt>
-    PGMIndex(RandomIt first, RandomIt last)
+    PGMIndex(RandomIt first, RandomIt last, double factor = 0.01)
         : n(std::distance(first, last)),
           first_key(n ? *first : K(0)),
           segments(),
           levels_offsets() {
-        data_fd = open(DATA_FILE,O_RDONLY);
+        data_fd = open(DATA_FILE,O_RDONLY|O_DIRECT);
         if (data_fd < 0)
             throw std::runtime_error("Cannot open data file");
         build(first, last, Epsilon, EpsilonRecursive, segments, levels_offsets);
-        seg_fd = open(SEGMENT_FILE,O_RDONLY);
+        seg_fd = open(SEGMENT_FILE,O_RDONLY|O_DIRECT);
         if (data_fd < 0)
             throw std::runtime_error("Cannot open segment file");
-        if ((ssize_t)(MemoryBudget-n*sizeof(Segment)/(2*Epsilon))<=0){
-            type = SEGMENT;
-            cache = std::make_unique<PageCache>(this, 0.8*MemoryBudget, data_fd, n);
-            seg_cache = std::make_unique<PageCache>(this, 0.2*MemoryBudget, seg_fd, n);
+        if (type==SEGMENT||(ssize_t)(MemoryBudget-n*sizeof(Segment)/(2*Epsilon))<=0){
+            std::cout<<"Segment cache"<<std::endl;
+            if (strategy == LRU) {
+                cache = std::make_unique<LRUCache>((1-factor)*MemoryBudget/PAGE_SIZE, data_fd);
+                seg_cache = std::make_unique<LRUCache>(factor*MemoryBudget/PAGE_SIZE, seg_fd);
+            }else if (strategy == FIFO){
+                cache = std::make_unique<FIFOCache>((1-factor)*MemoryBudget/PAGE_SIZE, data_fd);
+                seg_cache = std::make_unique<FIFOCache>(factor*MemoryBudget/PAGE_SIZE, seg_fd);
+            }else if (strategy == LFU){
+                cache = std::make_unique<LFUCache>((1-factor)*MemoryBudget/PAGE_SIZE, data_fd);
+                seg_cache = std::make_unique<LFUCache>(factor*MemoryBudget/PAGE_SIZE, seg_fd);
+            }
         }
         else{
-            type = DATA;
-            cache = std::make_unique<PageCache>(this, (MemoryBudget-n*sizeof(Segment)/(2*Epsilon))/PAGE_SIZE, 
-                    data_fd, n);
+            if (strategy == LRU) {
+                cache = std::make_unique<LRUCache>((MemoryBudget-n*sizeof(Segment)/(2*Epsilon))/PAGE_SIZE, data_fd);
+                seg_cache = std::make_unique<LRUCache>(factor*MemoryBudget/PAGE_SIZE, seg_fd);
+            }else if (strategy == FIFO) { 
+                cache = std::make_unique<FIFOCache>((MemoryBudget-n*sizeof(Segment)/(2*Epsilon))/PAGE_SIZE, data_fd);
+                seg_cache = std::make_unique<FIFOCache>(factor*MemoryBudget/PAGE_SIZE, seg_fd);
+            }else if (strategy == LFU){
+                cache = std::make_unique<LFUCache>((MemoryBudget-n*sizeof(Segment)/(2*Epsilon))/PAGE_SIZE, data_fd);
+                seg_cache = std::make_unique<LFUCache>(factor*MemoryBudget/PAGE_SIZE, seg_fd);
+            }
+
         } 
 
     }
@@ -444,15 +392,17 @@ public:
      */
     const std::vector<size_t> &get_levels_offsets() const { return levels_offsets; }
     const size_t get_segment_size() const { return sizeof(Segment); }
-    const size_t get_cache_misses() const { return cache_misses; }
-    const size_t get_cache_hits() const { return cache_hits; }
+    const auto get_data_cache() const { return cache.get(); }
+    const auto get_index_cache() const { return seg_cache.get(); }
+    // const size_t get_IO_time() const { return IO_time; }
 };
 
 
 #pragma pack(push, 1)
 
-template<typename K, size_t Epsilon, size_t MemoryBudget, size_t EpsilonRecursive, typename Floating>
-struct PGMIndex<K, Epsilon, MemoryBudget, EpsilonRecursive, Floating>::Segment {
+template<typename K, size_t Epsilon, size_t MemoryBudget, CacheStrategy strategy ,CacheType type,
+    size_t EpsilonRecursive, typename Floating>
+struct PGMIndex<K, Epsilon, MemoryBudget, strategy, type, EpsilonRecursive, Floating>::Segment {
     K key;              ///< The first key that the segment indexes.
     Floating slope;     ///< The slope of the segment.
     uint32_t intercept; ///< The intercept of the segment.
