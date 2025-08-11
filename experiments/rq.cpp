@@ -1,0 +1,236 @@
+/*
+ * This example shows how to index and query a vector of random integers with the PGM-index.
+ * Compile with:
+ *   g++ simple.cpp -std=c++17 -I../include -o simple
+ * Run with:
+ *   ./simple
+ */
+
+#include <iostream>
+#include <fstream>
+#include <vector>
+#include <random>
+#include <unordered_map>
+#include <algorithm>
+#include <cstdint>
+#include <cassert>
+#include <chrono>
+#include <fstream>
+#include "distribution/zipf.hpp"
+#include "pgm/pgm_index_cost.hpp"
+
+using KeyType = uint64_t;
+#define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
+#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
+
+struct Record {
+    uint64_t key;
+};
+
+struct RangeQuery {
+    uint64_t lo;
+    uint64_t hi;
+};
+
+struct BenchmarkResult {
+    size_t epsilon;
+    double time_ns;
+    double hit_ratio;
+    double index_hit_ratio;
+    time_t total_time;
+    time_t data_IO_time;
+    time_t index_IO_time;
+    size_t height;
+    size_t data_IOs;
+};
+
+using timer = std::chrono::high_resolution_clock;
+
+std::vector<KeyType> load_data(std::string filename){
+    std::ifstream infile(filename, std::ios::binary);
+    if (!infile) {
+        std::cerr << "Failed to open input file: " << filename << "\n";
+        return {};
+    }
+    // Read total number of keys in the original file
+    uint64_t total_keys;
+    infile.read(reinterpret_cast<char*>(&total_keys), sizeof(uint64_t));
+
+    std::vector<KeyType> keys(total_keys);
+    infile.read(reinterpret_cast<char*>(keys.data()), total_keys * sizeof(Record));
+
+    if (!infile) {
+        std::cerr << "Error while reading input file data.\n";
+    }
+
+    return keys;
+}
+
+// std::vector<KeyType> load_queries(const std::string& filename) {
+//     std::ifstream infile(filename, std::ios::binary);
+//     infile.seekg(0, std::ios::end);
+//     size_t filesize = infile.tellg();
+//     infile.seekg(0);
+//     size_t num_queries = filesize / sizeof(KeyType);
+//     std::vector<KeyType> queries(num_queries);
+//     infile.read(reinterpret_cast<char*>(queries.data()), filesize);
+//     return queries;
+// }
+
+std::vector<RangeQuery> load_queries(const std::string& filename) {
+    std::vector<RangeQuery> queries;
+    std::ifstream fin(filename, std::ios::binary);
+    if (!fin) {
+        std::cerr << "Failed to open file " << filename << std::endl;
+        return queries;
+    }
+
+    RangeQuery rq;
+    while (fin.read(reinterpret_cast<char*>(&rq), sizeof(RangeQuery))) {
+        queries.push_back(rq);
+    }
+
+    return queries;
+}
+
+uint64_t extract_key(const char* record) {
+    // 假设 key 是前 8 个字节（little-endian）
+    uint64_t key;
+    std::memcpy(&key, record, sizeof(uint64_t));
+    return key;
+}
+
+const char* binary_search_record(const std::vector<char>& buffer, size_t lo, size_t hi, uint64_t target_key) {
+    size_t left = lo;
+    size_t right = hi;
+
+    while (left < right) {
+        size_t mid = left + (right - left) / 2;
+        const char* mid_ptr = buffer.data() + mid * RECORD_SIZE;
+        uint64_t mid_key = extract_key(mid_ptr);
+
+        if (mid_key < target_key) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    // 检查 left 是否就是目标
+    if (left < hi) {
+        const char* candidate = buffer.data() + left * RECORD_SIZE;
+        uint64_t candidate_key = extract_key(candidate);
+        if (candidate_key == target_key) {
+            return candidate; // 找到
+        }
+    }
+
+    return nullptr; // 没找到
+}
+
+template <size_t Epsilon, size_t M>
+BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<RangeQuery> queries,std::string filename) {
+    pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheStrategy::LFU, pgm::CacheType::DATA> index(data,filename);
+    auto t0 = timer::now();
+    int cnt = 0;
+    for (auto &q : queries) {
+        if (++cnt==queries.size()/3) std::cout << "33% finished" << std::endl;
+        else if (cnt==queries.size()/2) std::cout << "50% finished" << std::endl;
+        else if (cnt==queries.size()*4/5) std::cout << "80% finished" << std::endl;
+        auto range = index.range_search(q.lo,q.hi,pgm::RangeSearchStrategy::MID);
+    }
+    auto t1 = timer::now();
+    auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    auto query_ns = t / queries.size();
+    
+    auto cache = index.get_data_cache();
+    auto index_cache = index.get_index_cache();
+
+    size_t total_hits = cache->get_hit_count();
+    size_t total_access = cache->get_hit_count() + cache->get_miss_count();
+    size_t index_total_hits = index_cache->get_hit_count();
+    size_t index_total_access = index_cache->get_hit_count() + index_cache->get_miss_count();
+
+    std::cout << "C=" << cache->get_C() << std::endl; 
+    BenchmarkResult result;
+    result.epsilon = Epsilon;
+    result.time_ns = query_ns;
+    result.hit_ratio = static_cast<double>(total_hits) / total_access;
+    result.index_hit_ratio = static_cast<double>(index_total_hits) / index_total_access;
+    result.total_time = t;
+    result.data_IO_time = cache->get_IO_time();
+    result.index_IO_time = index_cache->get_IO_time();
+    result.height = index.height();
+    result.data_IOs = cache->get_IOs();
+    return result;
+}
+
+int main() {
+    std::string filename = "fb_20M_uint64_unique";
+    std::string query_filename = "range_query_fb_uu.bin";
+    std::string file = DATASETS + filename;
+    std::string query_file = DATASETS + query_filename;
+    std::vector<KeyType> data = load_data(file);
+    std::vector<RangeQuery> queries = load_queries(query_file);
+    const size_t MemoryBudget = 20*1024*1024;
+    
+    int trials = 1;
+    std::ofstream ofs("range-uu-LFU-fb-20M-M20-mid.csv");
+    ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,avg_index_cache_hit_ratio,data_IOs\n";
+
+    for (int t=0; t<trials; t++){
+        for (size_t epsilon : {8,10,12,14,16,18,20,24,28,32,40,48,56,64}) {     //8,10,12,14,16,18,20,24,28,32,40,48,56,64
+            BenchmarkResult result;
+            switch (epsilon) {
+                case 2: result = benchmark<2, MemoryBudget>(data, queries, file); break;
+                case 4: result = benchmark<4, MemoryBudget>(data, queries, file); break;
+                case 6: result = benchmark<6, MemoryBudget>(data, queries, file); break;
+                case 8:  result = benchmark<8, MemoryBudget>(data, queries, file); break;
+                case 9: result = benchmark<9, MemoryBudget>(data, queries, file); break;
+                case 10: result = benchmark<10, MemoryBudget>(data, queries, file); break;
+                case 11: result = benchmark<11, MemoryBudget>(data, queries, file); break;
+                case 12: result = benchmark<12, MemoryBudget>(data, queries, file); break;
+                case 13: result = benchmark<13, MemoryBudget>(data, queries, file); break;
+                case 14: result = benchmark<14, MemoryBudget>(data, queries, file); break;
+                case 15: result = benchmark<15, MemoryBudget>(data, queries, file); break;
+                case 16: result = benchmark<16, MemoryBudget>(data, queries, file); break;
+                case 17: result = benchmark<17, MemoryBudget>(data, queries, file); break;
+                case 18: result = benchmark<18, MemoryBudget>(data, queries, file); break;
+                case 19: result = benchmark<19, MemoryBudget>(data, queries, file); break;
+                case 20: result = benchmark<20, MemoryBudget>(data, queries, file); break;
+                case 21: result = benchmark<21, MemoryBudget>(data, queries, file); break;
+                case 22: result = benchmark<22, MemoryBudget>(data, queries, file); break;
+                case 23: result = benchmark<23, MemoryBudget>(data, queries, file); break;
+                case 24: result = benchmark<24, MemoryBudget>(data, queries, file); break;
+                case 25: result = benchmark<25, MemoryBudget>(data, queries, file); break;
+                case 26: result = benchmark<26, MemoryBudget>(data, queries, file); break;
+                case 28: result = benchmark<28, MemoryBudget>(data, queries, file); break;
+                case 30: result = benchmark<30, MemoryBudget>(data, queries, file); break;
+                case 32: result = benchmark<32, MemoryBudget>(data, queries, file); break;
+                case 40: result = benchmark<40, MemoryBudget>(data, queries, file); break;
+                case 48: result = benchmark<48, MemoryBudget>(data, queries, file); break;
+                case 56: result = benchmark<56, MemoryBudget>(data, queries, file); break;
+                case 64: result = benchmark<64, MemoryBudget>(data, queries, file); break;
+                // case 128: result = benchmark<128, MemoryBudget>(data, queries, file); break;
+            }
+
+            std::cout << "ε=" << result.epsilon
+                    << ", time=" << result.time_ns << " ns"
+                    << ", hit ratio=" << result.hit_ratio
+                    << ", index hit ratio=" << result.index_hit_ratio
+                    << ", total time=" << result.total_time << " ns"
+                    << ", data IO time=" << result.data_IO_time << " ns"
+                    << ", index IO time=" << result.index_IO_time << " ns" 
+                    << ", data IOs=" << result.data_IOs
+                    << ", height=" << result.height << std::endl;
+            ofs << result.epsilon << "," << result.time_ns << "," << result.hit_ratio << "," 
+            << result.index_hit_ratio <<  "," << result.data_IOs <<"\n";
+        }
+    }
+    
+    ofs.close();
+    
+    return 0;
+}
+
+

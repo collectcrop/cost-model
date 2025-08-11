@@ -39,6 +39,7 @@ class FIFOCache : public ICache<size_t, Page> {
         this->cache_hits = 0;
         this->cache_misses = 0;
         this->IO_time = 0;
+        this->IOs = 0;
     }
 
     /**
@@ -78,4 +79,5 @@ class FIFOCache : public ICache<size_t, Page> {
     size_t get_hit_count() const override { return cache_hits; }
     size_t get_miss_count() const override { return cache_misses; }
     size_t get_IO_time() const override { return IO_time; }
+    size_t get_IOs() const override {return IOs; }
 };

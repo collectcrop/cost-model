@@ -46,9 +46,7 @@ using ::Page;
 #define PGM_SUB_EPS(x, epsilon) ((x) <= (epsilon) ? 0 : ((x) - (epsilon)))
 #define PGM_ADD_EPS(x, epsilon, size) ((x) + (epsilon) + 2 >= (size) ? (size) : (x) + (epsilon) + 2)
 #define PAGE_SIZE 4096
-#define DATA_FILE "pgm_test_file.bin"
 #define SEGMENT_FILE "pgm_test_file_seg.bin"
-#define RECORD_SIZE 16
 #define ITEM_PER_PAGE (PAGE_SIZE / RECORD_SIZE)
 /**
  * A struct that stores the result of a query to a @ref PGMIndex, that is, a range [@ref lo, @ref hi)
@@ -76,6 +74,21 @@ typedef enum CacheStrategy {
     LFU,
     FIFO
 } CacheStrategy;
+
+typedef enum RangeSearchStrategy {
+    LO,
+    MID,
+    HI
+} RangeSearchStrategy;
+
+typedef struct Record {
+    uint64_t key;
+    bool operator<(const Record& other) const {
+        return key < other.key;
+    }
+} Record;
+
+#define RECORD_SIZE sizeof(Record)
 
 /**
  * A space-efficient index that enables fast search operations on a sorted sequence of numbers.
@@ -267,7 +280,6 @@ protected:
 
             return seg_id;
     }
-        
 
 public:
 
@@ -285,26 +297,27 @@ public:
      * Constructs the index on the given sorted vector.
      * @param data the vector of keys to be indexed, must be sorted
      */
-    explicit PGMIndex(const std::vector<K> &data, double factor=0.01) : PGMIndex(data.begin(), data.end(),factor) {}
+    explicit PGMIndex(const std::vector<K> &data, std::string filename, double factor=0.01)         : PGMIndex(data.begin(), data.end(), filename, factor) {}
 
     /**
      * Constructs the index on the sorted keys in the range [first, last).
      * @param first, last the range containing the sorted keys to be indexed
      */
     template<typename RandomIt>
-    PGMIndex(RandomIt first, RandomIt last, double factor = 0.01)
+    PGMIndex(RandomIt first, RandomIt last, std::string filename, double factor = 0.01)
         : n(std::distance(first, last)),
           first_key(n ? *first : K(0)),
           segments(),
           levels_offsets() {
-        data_fd = open(DATA_FILE,O_RDONLY|O_DIRECT);
+        // data_fd = open(filename.c_str(),O_RDONLY|O_DIRECT);      // test for real IO time
+        data_fd = open(filename.c_str(),O_RDONLY);                  // test for IOs
         if (data_fd < 0)
             throw std::runtime_error("Cannot open data file");
         build(first, last, Epsilon, EpsilonRecursive, segments, levels_offsets);
         seg_fd = open(SEGMENT_FILE,O_RDONLY|O_DIRECT);
         if (data_fd < 0)
             throw std::runtime_error("Cannot open segment file");
-        if (type==SEGMENT||(ssize_t)(MemoryBudget-n*sizeof(Segment)/(2*Epsilon))<=0){
+        if (type==SEGMENT){     // ||(ssize_t)(MemoryBudget-n*sizeof(Segment)/(2*Epsilon))<=0
             std::cout<<"Segment cache"<<std::endl;
             if (strategy == LRU) {
                 cache = std::make_unique<LRUCache>((1-factor)*MemoryBudget/PAGE_SIZE, data_fd);
@@ -318,6 +331,9 @@ public:
             }
         }
         else{
+            if ((ssize_t)(MemoryBudget-n*sizeof(Segment)/(2*Epsilon))<=0){
+                std::cout << "memory overflow!" << std::endl;
+            }
             if (strategy == LRU) {
                 cache = std::make_unique<LRUCache>((MemoryBudget-n*sizeof(Segment)/(2*Epsilon))/PAGE_SIZE, data_fd);
                 seg_cache = std::make_unique<LRUCache>(factor*MemoryBudget/PAGE_SIZE, seg_fd);
@@ -368,6 +384,62 @@ public:
         return {buffer, rel_lo, rel_hi};
     }
 
+    /**
+     * Returns all keys in provided range.
+     * @param lo the target keys lower bound
+     * @param hi the target keys upper bound
+     * @return a vector contains all keys in provided range.
+     */
+    std::vector<K> range_search(const K &lo, const K &hi, RangeSearchStrategy s=MID){
+        std::vector<K> res;
+        if (hi<first_key) return res;
+        K tar;
+        switch(s){
+            case MID:
+                tar = (lo+hi)/2;
+                break;
+            case LO:
+                tar = lo;
+                break;
+            case HI:
+                tar = hi;
+                break;
+        }
+        auto it = segment_for_key(tar);
+        size_t pos = std::min<size_t>((*it)(tar), std::next(it)->intercept);
+        size_t pageIndex = pos/ITEM_PER_PAGE;
+        Page* page = &cache->get(pageIndex);
+        K l,r;
+        std::pair<K,K> lr;
+        lr = inner_search(*page,res,lo,hi);l=lr.first;r=lr.second;
+        while (l==0&&pageIndex>0){
+            page = &cache->get(--pageIndex);
+            lr = inner_search(*page,res,lo,hi);
+            l = lr.first;
+        }
+        while (r==ITEM_PER_PAGE-1){
+            page = &cache->get(++pageIndex);
+            lr = inner_search(*page,res,lo,hi);
+            r = lr.second;
+        }
+        return res;
+    }
+
+    std::pair<K,K> inner_search(Page &p, std::vector<K>& res, K lo, K hi){
+        Record* recs = reinterpret_cast<Record*>(p.data.get());
+        Record* begin = recs;
+        Record* end   = recs + p.valid_len / sizeof(Record);
+
+        Record* lb = std::lower_bound(begin, end, lo, 
+            [](const Record& r, K key) { return r.key < key; });
+        Record* ub = std::upper_bound(begin, end, hi, 
+            [](K key, const Record& r) { return key < r.key; });
+
+        for (auto it=lb;it<ub;it++){
+            res.push_back(it->key);
+        }
+        return {lb-begin,ub-begin-1};
+    }
     /**
      * Returns the number of segments in the last level of the index.
      * @return the number of segments

@@ -31,6 +31,7 @@ protected:
     size_t cache_misses;
     size_t cache_hits;
     size_t IO_time;
+    size_t IOs;
     int fd;
     size_t C;       // Number of buffered pages
 
@@ -54,7 +55,7 @@ public:
         auto query_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
         // std::cout << "Reading page " << index << " took " << query_ns << " ns" << std::endl;
         IO_time += query_ns;
-
+        IOs++;
         if (bytes < 0){
             std::cout << fd << std::endl; 
             throw std::runtime_error("Failed to read data from disk at offset " + std::to_string(offset));
@@ -70,4 +71,6 @@ public:
     virtual size_t get_hit_count() const = 0;
     virtual size_t get_miss_count() const = 0;
     virtual size_t get_IO_time() const = 0;
+    virtual size_t get_IOs() const = 0;
+    size_t get_C() const { return C; }
 };

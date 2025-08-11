@@ -24,8 +24,6 @@ using timer = std::chrono::high_resolution_clock;
 
 
 class LRUCache : public ICache<size_t, Page> {
-    size_t cnt;     // current number of buffered pages
-    
     using LRUIter = std::list<size_t>::iterator;
 
     struct CacheEntry {
@@ -49,7 +47,7 @@ class LRUCache : public ICache<size_t, Page> {
         this->cache_hits = 0;
         this->cache_misses = 0;
         this->IO_time = 0;
-        cnt = 0;
+        this->IOs = 0;
     }
 
     /**
@@ -69,11 +67,10 @@ class LRUCache : public ICache<size_t, Page> {
         }
         this->cache_misses++;
         // Evict if full
-        if (cnt >= C) {
+        if (cache.size() >= C) {
             size_t old = lru.back();
             lru.pop_back();
             cache.erase(old);
-            cnt--;
         }
 
 
@@ -83,17 +80,16 @@ class LRUCache : public ICache<size_t, Page> {
         // Insert new page
         lru.push_front(index);
         cache[index] = CacheEntry{std::move(p), lru.begin()};
-        cnt ++;
         return cache[index].page;    
     }
 
     void clear() override {
         cache.clear();
         lru.clear();
-        cnt = 0;
     }
 
     size_t get_hit_count() const override { return cache_hits; }
     size_t get_miss_count() const override { return cache_misses; }
     size_t get_IO_time() const override { return IO_time; }
+    size_t get_IOs() const override {return IOs; }
 };
