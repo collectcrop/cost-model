@@ -4,6 +4,7 @@ import numpy as np
 from scipy.optimize import brentq  # 用于解非线性方程
 from scipy.special import zeta     # Riemann zeta 函数
 from collections import Counter
+from scipy.signal import fftconvolve
 
 alpha = 1
 DATASETS_DIRECTORY = "/mnt/home/zwshi/Datasets/SOSD/"
@@ -25,8 +26,8 @@ def triangular_kernel_from_box(epsilon):
 def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=False):
     """
     args:
-      query_file: 二进制文件路径或 numpy array of query keys (uint64)
-      data: 已排序的 data keys (np.array dtype uint64) OR just integer N (total positions)
+      query_file: binary file path or numpy array of query keys (uint64)
+      data: sorted data keys (np.array dtype uint64)
       epsilon: int
       ipp: items per page
     returns:
@@ -42,29 +43,23 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
 
     Q = len(queries)
 
-    # 如果 data 是 array，则 N = len(data)，同时把 queries 映成真实位置 pos
-    if isinstance(data, np.ndarray):
-        N = len(data)
-        # pos = index of largest data <= query -> searchsorted -1
-        pos = np.searchsorted(data, queries, side='right') - 1
-        pos = np.clip(pos, 0, N-1).astype(np.int64)
-    else:
-        # data 给的是总长度 N（位置空间）
-        N = int(data)
-        # 如果只有 keys 的分布不可映射到 pos，这里我们假设 queries 已经是位置（0..N-1）
-        pos = queries.astype(np.int64)
-        pos = np.clip(pos, 0, N-1)
+    assert isinstance(data, np.ndarray)
+    N = len(data)
+    # pos = index of largest data <= query -> searchsorted -1
+    pos = np.searchsorted(data, queries, side='right') - 1
+    pos = np.clip(pos, 0, N-1).astype(np.int64)
+    
 
-    # 1) 构造真实位置直方图 H (长度 N)
+    # 1)  construct H(p) (len=N)
     H = np.bincount(pos, minlength=N).astype(np.float64)  # sum(H) == Q
 
-    # 2) 构造合成核 k = g * h. 我们假设 g = uniform box, h = uniform box => k = triangular
+    # 2) construct k = g * h. assume g = uniform box, h = uniform box => k = triangular
     k = triangular_kernel_from_box(epsilon)  # length K = 4*eps + 1, sums to 1
 
     # 3) 卷积 H * k -> T positions (期望位置访问次数). 使用 'same' 保持长度 N
     if use_fft:
         # 对于非常大 N 可考虑 FFT 卷积实现，如 scipy.signal.fftconvolve
-        from scipy.signal import fftconvolve
+        
         T = fftconvolve(H, k, mode='same')
     else:
         T = np.convolve(H, k, mode='same')
@@ -82,6 +77,33 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
     page_counts = T_padded.reshape(num_pages, ipp).sum(axis=1)  # expected counts per page
 
     return page_counts, T
+
+def estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, ipp, use_fft=False):
+    # map lo->positions then to pages
+    N = len(data)
+    lo_pos = np.searchsorted(data, lo_keys, side='right') - 1
+    hi_pos = np.searchsorted(data, hi_keys, side='right') - 1
+    lo_pos = np.clip(lo_pos, 0, N-1)
+    hi_pos = np.clip(hi_pos, 0, N-1)
+    # page indices
+    lo_pages = lo_pos // ipp
+    hi_pages = hi_pos // ipp
+    num_pages = math.ceil(N / ipp)
+    count = Counter()
+
+    for i in range(len(lo_pages)):
+        for page in range(lo_pages[i],hi_pages[i]+1):
+            count[page] += 1
+            
+    for i in range(len(lo_pages)):
+        start_pos = max(0,lo_pos[i]-epsilon)
+        for page in range(start_pos//ipp,lo_pages[i]):
+            page_start = page * ipp
+            page_end   = min((page + 1) * ipp - 1, N - 1)
+            count[page] += (page_end - max(page_start,start_pos))/(2*epsilon+1)
+    
+    return count                  #, k_pages, offset_min
+
 
 def extract_query_distribution(filename,data,epsilon,ipp):
     """
@@ -180,6 +202,30 @@ def validate_ratio(ratio):
         h = ratio
     return h
 
+def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_file=""):
+    M_index = n * seg_size / (2 * epsilon)
+    M_buffer = M - M_index
+    C = M_buffer/ps
+    total_pages = math.ceil(n / ipp)
+    data = np.fromfile(data_file, dtype=np.uint64)[1:]
+    queries = np.fromfile(query_file, dtype=np.uint64).reshape(-1, 2)
+    lo_keys,hi_keys = queries[:,0],queries[:,1]
+    pos_lo = np.searchsorted(data, lo_keys, side='right') - 1
+    pos_hi = np.searchsorted(data, hi_keys, side='right') - 1
+    keys = pos_hi - pos_lo
+    RDAC = np.ceil(keys/ipp) + np.floor(1-(pos_hi%ipp-pos_lo%ipp)/ipp) + epsilon/ipp
+    page_counts = estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, ipp)
+    total = sum(page_counts.values())
+    q = np.array([f / total for f in page_counts.values()], dtype=np.float64)
+    q = np.sort(q)[::-1]
+    
+    buffer_ratio = sample_ratio(C, total_pages, q)
+    # print(buffer_ratio)
+    h = validate_ratio(buffer_ratio)
+    
+    print((1-h)*RDAC.sum()/len(queries))
+    return (1-h)*RDAC.sum()/len(queries), h
+    
 def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="", data_file=""):
     M_index = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
@@ -206,33 +252,35 @@ def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="
     return (1 - h) * expected_DAC(epsilon, ipp), h
 
 
+def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file=""):
+    eps_list = []
+    cost_list = []
+    h_list = []
+    least_eps = math.ceil(n*seg_size/(2*M))
+    for eps in range(least_eps, 129):
+        cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query_file, data_file)
+        eps_list.append(eps)
+        cost_list.append(cost)
+        h_list.append(h)
+    print(eps_list)
+    print("cost:",cost_list)
+    print("ratio:",h_list)
+    return eps_list, cost_list
 
 def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file=""):
     eps_list = []
     cost_list = []
+    h_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
     for eps in range(least_eps, 65):
         cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query_file, data_file)
         eps_list.append(eps)
         cost_list.append(cost)
-    print(eps_list)
-    print(cost_list)
-    return eps_list, cost_list
-
-def getExpectedCacheHitRatioPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file=""):
-    eps_list = []
-    h_list = []
-    least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(least_eps, 65):
-        cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query_file, data_file)
-
-        eps_list.append(eps)
         h_list.append(h)
-    
     print(eps_list)
-    print(h_list)
-    return eps_list, h_list
-
+    print("cost:",cost_list)
+    print("ratio:",h_list)
+    return eps_list, cost_list
 
 def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
     best_cost = float('inf')
@@ -251,13 +299,15 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
     
 
 def main():
-    M = 30*1024*1024
+    M = 10*1024*1024
     data_file = f"{DATASETS_DIRECTORY}books_20M_uint64_unique"
     query_file = f"{DATASETS_DIRECTORY}books_20M_uint64_unique.query.bin"
     # getOptimalEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,type="sample")
     eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,type="sample",
                                                    data_file=data_file,query_file=query_file)
     
-    
+    # data_file = f"{DATASETS_DIRECTORY}fb_20M_uint64_unique"
+    # query_file = f"{DATASETS_DIRECTORY}range_query_fb_uu.bin"
+    # getExpectedRangeCostPerEpsilon(n=int(2e7),seg_size=16,M=M,ipp=512,ps=4096,query_file=query_file,data_file=data_file)
 if __name__ == "__main__":
     main()

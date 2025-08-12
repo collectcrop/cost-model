@@ -111,7 +111,7 @@ typedef struct Record {
  * @tparam EpsilonRecursive controls the size of the search range in the internal structure
  * @tparam Floating the floating-point type to use for slopes
  */
-template<typename K, size_t Epsilon = 64, size_t MemoryBudget=1<<23, CacheStrategy strategy = LRU ,CacheType type = DATA,
+template<typename K, size_t Epsilon = 64, size_t MemoryBudget=1<<23, CacheType type = DATA,
     size_t EpsilonRecursive = 4, typename Floating = float>
 class PGMIndex {
 protected:
@@ -297,14 +297,15 @@ public:
      * Constructs the index on the given sorted vector.
      * @param data the vector of keys to be indexed, must be sorted
      */
-    explicit PGMIndex(const std::vector<K> &data, std::string filename, double factor=0.01)         : PGMIndex(data.begin(), data.end(), filename, factor) {}
+    explicit PGMIndex(const std::vector<K> &data, std::string filename, CacheStrategy strategy=LFU, double factor=0.01) 
+    : PGMIndex(data.begin(), data.end(), filename, strategy, factor) {}
 
     /**
      * Constructs the index on the sorted keys in the range [first, last).
      * @param first, last the range containing the sorted keys to be indexed
      */
     template<typename RandomIt>
-    PGMIndex(RandomIt first, RandomIt last, std::string filename, double factor = 0.01)
+    PGMIndex(RandomIt first, RandomIt last, std::string filename, CacheStrategy strategy=LFU, double factor = 0.01)
         : n(std::distance(first, last)),
           first_key(n ? *first : K(0)),
           segments(),
@@ -472,9 +473,9 @@ public:
 
 #pragma pack(push, 1)
 
-template<typename K, size_t Epsilon, size_t MemoryBudget, CacheStrategy strategy ,CacheType type,
+template<typename K, size_t Epsilon, size_t MemoryBudget, CacheType type,
     size_t EpsilonRecursive, typename Floating>
-struct PGMIndex<K, Epsilon, MemoryBudget, strategy, type, EpsilonRecursive, Floating>::Segment {
+struct PGMIndex<K, Epsilon, MemoryBudget, type, EpsilonRecursive, Floating>::Segment {
     K key;              ///< The first key that the segment indexes.
     Floating slope;     ///< The slope of the segment.
     uint32_t intercept; ///< The intercept of the segment.

@@ -108,8 +108,8 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 }
 
 template <size_t Epsilon, size_t M>
-BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries,std::string filename) {
-    pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheStrategy::FIFO, pgm::CacheType::DATA> index(data,filename);
+BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries,std::string filename, pgm::CacheStrategy s) {
+    pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s);
     auto t0 = timer::now();
     int cnt = 0;
     for (auto &q : queries) {
@@ -178,36 +178,36 @@ int main() {
         for (size_t epsilon : {2,4,6,8,9,10,12,14,16,18,20,24,28,32,40,48,56,64}) {     //8,10,12,14,16,18,20,24,28,32,40,48,56,64
             BenchmarkResult result;
             switch (epsilon) {
-                case 2: result = benchmark<2, MemoryBudget>(data, queries, file); break;
-                case 4: result = benchmark<4, MemoryBudget>(data, queries, file); break;
-                case 6: result = benchmark<6, MemoryBudget>(data, queries, file); break;
-                case 8:  result = benchmark<8, MemoryBudget>(data, queries, file); break;
-                case 9: result = benchmark<9, MemoryBudget>(data, queries, file); break;
-                case 10: result = benchmark<10, MemoryBudget>(data, queries, file); break;
-                case 11: result = benchmark<11, MemoryBudget>(data, queries, file); break;
-                case 12: result = benchmark<12, MemoryBudget>(data, queries, file); break;
-                case 13: result = benchmark<13, MemoryBudget>(data, queries, file); break;
-                case 14: result = benchmark<14, MemoryBudget>(data, queries, file); break;
-                case 15: result = benchmark<15, MemoryBudget>(data, queries, file); break;
-                case 16: result = benchmark<16, MemoryBudget>(data, queries, file); break;
-                case 17: result = benchmark<17, MemoryBudget>(data, queries, file); break;
-                case 18: result = benchmark<18, MemoryBudget>(data, queries, file); break;
-                case 19: result = benchmark<19, MemoryBudget>(data, queries, file); break;
-                case 20: result = benchmark<20, MemoryBudget>(data, queries, file); break;
-                case 21: result = benchmark<21, MemoryBudget>(data, queries, file); break;
-                case 22: result = benchmark<22, MemoryBudget>(data, queries, file); break;
-                case 23: result = benchmark<23, MemoryBudget>(data, queries, file); break;
-                case 24: result = benchmark<24, MemoryBudget>(data, queries, file); break;
-                case 25: result = benchmark<25, MemoryBudget>(data, queries, file); break;
-                case 26: result = benchmark<26, MemoryBudget>(data, queries, file); break;
-                case 28: result = benchmark<28, MemoryBudget>(data, queries, file); break;
-                case 30: result = benchmark<30, MemoryBudget>(data, queries, file); break;
-                case 32: result = benchmark<32, MemoryBudget>(data, queries, file); break;
-                case 40: result = benchmark<40, MemoryBudget>(data, queries, file); break;
-                case 48: result = benchmark<48, MemoryBudget>(data, queries, file); break;
-                case 56: result = benchmark<56, MemoryBudget>(data, queries, file); break;
-                case 64: result = benchmark<64, MemoryBudget>(data, queries, file); break;
-                // case 128: result = benchmark<128, MemoryBudget>(data, queries, file); break;
+                case 2: result = benchmark<2, MemoryBudget>(data, queries, file, s); break;
+                case 4: result = benchmark<4, MemoryBudget>(data, queries, file, s); break;
+                case 6: result = benchmark<6, MemoryBudget>(data, queries, file, s); break;
+                case 8:  result = benchmark<8, MemoryBudget>(data, queries, file, s); break;
+                case 9: result = benchmark<9, MemoryBudget>(data, queries, file, s); break;
+                case 10: result = benchmark<10, MemoryBudget>(data, queries, file, s); break;
+                case 11: result = benchmark<11, MemoryBudget>(data, queries, file, s); break;
+                case 12: result = benchmark<12, MemoryBudget>(data, queries, file, s); break;
+                case 13: result = benchmark<13, MemoryBudget>(data, queries, file, s); break;
+                case 14: result = benchmark<14, MemoryBudget>(data, queries, file, s); break;
+                case 15: result = benchmark<15, MemoryBudget>(data, queries, file, s); break;
+                case 16: result = benchmark<16, MemoryBudget>(data, queries, file, s); break;
+                case 17: result = benchmark<17, MemoryBudget>(data, queries, file, s); break;
+                case 18: result = benchmark<18, MemoryBudget>(data, queries, file, s); break;
+                case 19: result = benchmark<19, MemoryBudget>(data, queries, file, s); break;
+                case 20: result = benchmark<20, MemoryBudget>(data, queries, file, s); break;
+                case 21: result = benchmark<21, MemoryBudget>(data, queries, file, s); break;
+                case 22: result = benchmark<22, MemoryBudget>(data, queries, file, s); break;
+                case 23: result = benchmark<23, MemoryBudget>(data, queries, file, s); break;
+                case 24: result = benchmark<24, MemoryBudget>(data, queries, file, s); break;
+                case 25: result = benchmark<25, MemoryBudget>(data, queries, file, s); break;
+                case 26: result = benchmark<26, MemoryBudget>(data, queries, file, s); break;
+                case 28: result = benchmark<28, MemoryBudget>(data, queries, file, s); break;
+                case 30: result = benchmark<30, MemoryBudget>(data, queries, file, s); break;
+                case 32: result = benchmark<32, MemoryBudget>(data, queries, file, s); break;
+                case 40: result = benchmark<40, MemoryBudget>(data, queries, file, s); break;
+                case 48: result = benchmark<48, MemoryBudget>(data, queries, file, s); break;
+                case 56: result = benchmark<56, MemoryBudget>(data, queries, file, s); break;
+                case 64: result = benchmark<64, MemoryBudget>(data, queries, file, s); break;
+                // case 128: result = benchmark<128, MemoryBudget>(data, queries, file, s); break;
             }
 
             std::cout << "ε=" << result.epsilon

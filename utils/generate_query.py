@@ -79,7 +79,7 @@ def generate_range_queries(num_queries, key_space_size,
     queries = np.array(queries[:num_queries], dtype=np.uint64)
     return queries
 def main():
-    num_queries = 1000000
+    num_queries = 10000000
     sizeList = [1e7,2e7,3e7,5e7,7e7,9e7,1e8]
     datasets = ["fb","books","osm_cellids","wiki_ts"]
     for dataset in datasets:
@@ -92,6 +92,7 @@ def main():
             queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
             print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
     
+    # num_queries = 1000000
     # queries = generate_range_queries(num_queries, 8000000000,
     #                              start_dist='uniform',
     #                              length_dist='uniform',
