@@ -358,7 +358,7 @@ public:
     /**
      * Returns the approximate position and the range where @p key can be found.
      * @param key the value of the element to search for
-     * @return a struct with the approximate position and bounds of the range
+     * @return a memory buffer with the approximate position and bounds of the range
      */
     ApproxPosExt search(const K &key) const {
         auto k = std::max(first_key, key);\
@@ -394,35 +394,46 @@ public:
     std::vector<K> range_search(const K &lo, const K &hi, RangeSearchStrategy s=MID){
         std::vector<K> res;
         if (hi<first_key) return res;
-        K tar;
-        switch(s){
-            case MID:
-                tar = (lo+hi)/2;
-                break;
-            case LO:
-                tar = lo;
-                break;
-            case HI:
-                tar = hi;
-                break;
-        }
-        auto it = segment_for_key(tar);
-        size_t pos = std::min<size_t>((*it)(tar), std::next(it)->intercept);
-        size_t pageIndex = pos/ITEM_PER_PAGE;
-        Page* page = &cache->get(pageIndex);
-        K l,r;
-        std::pair<K,K> lr;
-        lr = inner_search(*page,res,lo,hi);l=lr.first;r=lr.second;
-        while (l==0&&pageIndex>0){
-            page = &cache->get(--pageIndex);
-            lr = inner_search(*page,res,lo,hi);
-            l = lr.first;
-        }
-        while (r==ITEM_PER_PAGE-1){
-            page = &cache->get(++pageIndex);
-            lr = inner_search(*page,res,lo,hi);
-            r = lr.second;
-        }
+        // one-by-one strategy
+        // K tar;
+        // switch(s){
+        //     case MID:
+        //         tar = (lo+hi)/2;
+        //         break;
+        //     case LO:
+        //         tar = lo;
+        //         break;
+        //     case HI:
+        //         tar = hi;
+        //         break;
+        // }
+        // auto it = segment_for_key(tar);
+        // size_t pos = std::min<size_t>((*it)(tar), std::next(it)->intercept);
+        // size_t pageIndex = pos/ITEM_PER_PAGE;
+        // Page* page = &cache->get(pageIndex);
+        // K l,r;
+        // std::pair<K,K> lr;
+        // lr = inner_search(*page,res,lo,hi);l=lr.first;r=lr.second;
+        // while (l==0&&pageIndex>0){
+        //     page = &cache->get(--pageIndex);
+        //     lr = inner_search(*page,res,lo,hi);
+        //     l = lr.first;
+        // }
+        // while (r==ITEM_PER_PAGE-1){
+        //     page = &cache->get(++pageIndex);
+        //     lr = inner_search(*page,res,lo,hi);
+        //     r = lr.second;
+        // }
+
+        // all-in-once strategy
+        auto it_lo = segment_for_key(lo);
+        auto it_hi = segment_for_key(hi);
+        size_t pos_lo = std::min<size_t>((*it_lo)(lo), std::next(it_lo)->intercept);
+        size_t pos_hi = std::min<size_t>((*it_hi)(hi), std::next(it_hi)->intercept);
+        size_t page_lo = std::max(0,pos_lo-Epsilon)/ITEM_PER_PAGE;
+        size_t page_hi = std::min(n,pos_hi+Epsilon)/ITEM_PER_PAGE;
+
+
         return res;
     }
 

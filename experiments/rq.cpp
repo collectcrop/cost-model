@@ -189,7 +189,7 @@ int main() {
     std::string query_file = DATASETS + query_filename;
     std::vector<KeyType> data = load_data(file);
     std::vector<RangeQuery> queries = load_queries(query_file);
-    const size_t MemoryBudget = 20*1024*1024;
+    const size_t MemoryBudget = 80*1024*1024;
     
     int trials = 1;    
 

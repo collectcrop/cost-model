@@ -299,11 +299,11 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
     
 
 def main():
-    M = 10*1024*1024
-    data_file = f"{DATASETS_DIRECTORY}books_20M_uint64_unique"
-    query_file = f"{DATASETS_DIRECTORY}books_20M_uint64_unique.query.bin"
+    M = 120*1024*1024
+    data_file = f"{DATASETS_DIRECTORY}books_50M_uint64_unique"
+    query_file = f"{DATASETS_DIRECTORY}books_50M_uint64_unique.query.bin"
     # getOptimalEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,type="sample")
-    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,type="sample",
+    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(5e7),ps=4096,type="sample",
                                                    data_file=data_file,query_file=query_file)
     
     # data_file = f"{DATASETS_DIRECTORY}fb_20M_uint64_unique"

@@ -38,10 +38,11 @@ protected:
 public:
     virtual ~ICache() = default;
     // get cache value
-    virtual Value& get(const Key key) = 0;
+    virtual Value& get(const Key index) = 0;
+    virtual std::vector<Value> get(const Key lo, const Key hi) = 0;
+
     Page triggerIO(size_t index){
         Page p;
-        p.data.reset();
         void* raw_ptr = nullptr;
         if (posix_memalign(&raw_ptr, PAGE_SIZE, PAGE_SIZE) != 0) {
             throw std::runtime_error("posix_memalign failed");
@@ -62,6 +63,47 @@ public:
         }
         p.valid_len = bytes;
         return p;
+    }
+
+    std::vector<Page> triggerIO(size_t index, size_t page_num){
+        std::vector<Page> res;
+        // first read to a Aggregated page
+        void* raw_ptr = nullptr;
+        if (posix_memalign(&raw_ptr, PAGE_SIZE, PAGE_SIZE * page_num) != 0) {
+            throw std::runtime_error("posix_memalign failed");
+        }
+        std::unique_ptr<char[]> agg_data(reinterpret_cast<char*>(raw_ptr));
+
+        off_t offset = index * PAGE_SIZE;
+        auto t0 = timer::now();
+        ssize_t bytes = pread(fd, agg_data.get(), PAGE_SIZE * page_num, offset);
+        auto t1 = timer::now();
+        auto query_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+        // std::cout << "Reading page " << index << " took " << query_ns << " ns" << std::endl;
+        IO_time += query_ns;
+        IOs++;
+        if (bytes < 0){
+            std::cout << fd << std::endl; 
+            throw std::runtime_error("Failed to read data from disk at offset " + std::to_string(offset));
+        }
+
+        // then separate each page from Aggregated page
+        size_t pages_read = (bytes + PAGE_SIZE - 1) / PAGE_SIZE;
+        for (size_t i = 0; i < pages_read; i++) {
+            Page page;
+            void* page_ptr = nullptr;
+            if (posix_memalign(&page_ptr, PAGE_SIZE, PAGE_SIZE) != 0) {
+                throw std::runtime_error("posix_memalign failed for sub-page");
+            }
+            page.data.reset(reinterpret_cast<char*>(page_ptr));
+
+            size_t copy_size = std::min(static_cast<size_t>(bytes - i * PAGE_SIZE), PAGE_SIZE);
+            memcpy(page.data.get(), agg_data.get() + i * PAGE_SIZE, copy_size);
+
+            page.valid_len = copy_size;
+            res.push_back(std::move(page));
+        }
+        return res;
     }
 
     // clear cache

@@ -100,6 +100,94 @@ class LFUCache : public ICache<size_t, Page> {
         return cache[index].page;    
     }
 
+    /**
+     * Get segments in a page from the cache.
+     * @param lo is the index of the lowest page to retrieve
+     * @param hi is the index of the highest page to retrieve
+     * 
+     */
+    std::vector<Page> get(const size_t lo, const size_t hi) override {
+        std::vector<Page> res;
+        size_t miss_begin = (size_t)-1;
+
+        for (size_t index = lo; index <= hi; index++) {
+            auto it = cache.find(index);
+            if (it != cache.end()) {
+                // --- flush previous miss ---
+                if (miss_begin != (size_t)-1) {
+                    size_t miss_len = index - miss_begin;
+                    auto pages = triggerIO(miss_begin, miss_len);
+                    for (size_t i = 0; i < pages.size(); i++) {
+                        size_t idx = miss_begin + i;
+
+                        if (cache.size() >= C) {
+                            // evict LFU
+                            size_t old = freq_to_keys[min_freq].front();
+                            freq_to_keys[min_freq].pop_front();
+                            if (freq_to_keys[min_freq].empty()) {
+                                freq_to_keys.erase(min_freq);
+                            }
+                            cache.erase(old);
+                        }
+
+                        freq_to_keys[1].push_back(idx);
+                        cache[idx] = CacheEntry{std::move(pages[i]), 1, --freq_to_keys[1].end()};
+                        res.push_back(cache[idx].page);
+                    }
+                    miss_begin = (size_t)-1;
+                    min_freq = 1;
+                }
+
+                // --- cache hit ---
+                this->cache_hits++;
+                size_t freq = it->second.freq;
+                freq_to_keys[freq].erase(it->second.lfu_pos);
+                if (it->second.freq < MAX_FREQ) it->second.freq++;
+                freq_to_keys[it->second.freq].push_back(index);
+                it->second.lfu_pos = --freq_to_keys[it->second.freq].end();
+
+                if (freq_to_keys[freq].empty()) {
+                    freq_to_keys.erase(freq);
+                    if (min_freq == freq) min_freq++;
+                }
+
+                res.push_back(it->second.page);
+
+            } else {
+                // --- cache miss ---
+                if (miss_begin == (size_t)-1) miss_begin = index;
+                this->cache_misses++;
+            }
+        }
+
+        // --- flush tail miss ---
+        if (miss_begin != (size_t)-1) {
+            size_t miss_len = hi - miss_begin + 1;
+            auto pages = triggerIO(miss_begin, miss_len);
+            for (size_t i = 0; i < pages.size(); i++) {
+                size_t idx = miss_begin + i;
+
+                if (cache.size() >= C) {
+                    // evict LFU
+                    size_t old = freq_to_keys[min_freq].front();
+                    freq_to_keys[min_freq].pop_front();
+                    if (freq_to_keys[min_freq].empty()) {
+                        freq_to_keys.erase(min_freq);
+                    }
+                    cache.erase(old);
+                }
+
+                freq_to_keys[1].push_back(idx);
+                cache[idx] = CacheEntry{std::move(pages[i]), 1, --freq_to_keys[1].end()};
+                res.push_back(cache[idx].page);
+            }
+            min_freq = 1;
+        }
+
+        return res;
+    }
+
+
 
     void clear() override {
         cache.clear();

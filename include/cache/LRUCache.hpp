@@ -83,6 +83,75 @@ class LRUCache : public ICache<size_t, Page> {
         return cache[index].page;    
     }
 
+    /**
+     * Get segments in a page from the cache.
+     * @param lo is the index of the lowest page to retrieve
+     * @param hi is the index of the highest page to retrieve
+     * 
+     */
+    std::vector<Page> get(const size_t lo, const size_t hi) override {
+        std::vector<Page> res;
+        size_t miss_begin = (size_t)-1;
+
+        for (size_t index = lo; index <= hi; index++) {
+            auto it = cache.find(index);
+            if (it != cache.end()) {
+                // --- flush previous miss ---
+                if (miss_begin != (size_t)-1) {
+                    size_t miss_len = index - miss_begin;
+                    auto pages = triggerIO(miss_begin, miss_len);
+                    for (size_t i = 0; i < pages.size(); i++) {
+                        size_t idx = miss_begin + i;
+
+                        // eviction
+                        if (cache.size() >= C) {
+                            size_t old = lru.back(); lru.pop_back();
+                            cache.erase(old);
+                        }
+
+                        lru.push_front(idx);
+                        cache[idx] = CacheEntry{std::move(pages[i]), lru.begin()};
+                        res.push_back(cache[idx].page);
+                    }
+                    miss_begin = (size_t)-1;
+                }
+
+                // --- cache hit ---
+                this->cache_hits++;
+                lru.erase(it->second.lru_pos);
+                lru.push_front(index);
+                it->second.lru_pos = lru.begin();
+                res.push_back(it->second.page);
+
+            } else {
+                // --- cache miss ---
+                if (miss_begin == (size_t)-1) miss_begin = index;
+                this->cache_misses++;
+            }
+        }
+
+        // --- flush tail miss ---
+        if (miss_begin != (size_t)-1) {
+            size_t miss_len = hi - miss_begin + 1;
+            auto pages = triggerIO(miss_begin, miss_len);
+            for (size_t i = 0; i < pages.size(); i++) {
+                size_t idx = miss_begin + i;
+
+                // eviction
+                if (cache.size() >= C) {
+                    size_t old = lru.back(); lru.pop_back();
+                    cache.erase(old);
+                }
+
+                lru.push_front(idx);
+                cache[idx] = CacheEntry{std::move(pages[i]), lru.begin()};
+                res.push_back(cache[idx].page);
+            }
+        }
+
+        return res;
+    }
+
     void clear() override {
         cache.clear();
         lru.clear();

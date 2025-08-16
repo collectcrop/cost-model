@@ -163,17 +163,17 @@ std::string mk_outfilename(pgm::CacheStrategy s,std::string dataset,size_t ds, s
 
 int main() {
     std::string dataset = "books";
-    std::string filename = "books_20M_uint64_unique";
-    std::string query_filename = "books_20M_uint64_unique.query.bin";
+    std::string filename = "books_50M_uint64_unique";
+    std::string query_filename = "books_50M_uint64_unique.query.bin";
     std::string file = DATASETS + filename;
     std::string query_file = DATASETS + query_filename;
     std::vector<KeyType> data = load_data(file);
     std::vector<KeyType> queries = load_queries(query_file);
-    const size_t MemoryBudget = 10*1024*1024;
+    const size_t MemoryBudget = 120*1024*1024;
     
     int trials = 1;
     for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU}){
-        std::ofstream ofs(mk_outfilename(s,dataset,20,MemoryBudget>>20));
+        std::ofstream ofs(mk_outfilename(s,dataset,50,MemoryBudget>>20));
         ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,avg_index_cache_hit_ratio,data_IOs\n";
         for (size_t epsilon : {2,4,6,8,9,10,12,14,16,18,20,24,28,32,40,48,56,64}) {     //8,10,12,14,16,18,20,24,28,32,40,48,56,64
             BenchmarkResult result;
