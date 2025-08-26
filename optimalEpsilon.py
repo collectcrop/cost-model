@@ -8,6 +8,7 @@ from scipy.signal import fftconvolve
 
 alpha = 1
 DATASETS_DIRECTORY = "/mnt/home/zwshi/Datasets/SOSD/"
+LOG_DIRECTORY = "/mnt/home/zwshi/learned-index/cost-model/visualize/data/log/"
 
 def build_uniform_box_kernel(epsilon):
     """离散均匀 box kernel 长度 L=2*epsilon+1,已归一化"""
@@ -105,6 +106,20 @@ def estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, i
     return count                  #, k_pages, offset_min
 
 
+def extract_data_gap_distribution(data_file):
+    """
+    input:
+        data_file: binary file path of sorted data keys (uint64)
+    output:
+        miu: float, mean of gaps
+        sigma: float, stddev of gaps
+    """
+    data = np.fromfile(data_file, dtype=np.uint64)[1:]
+    gaps = np.diff(data)
+    miu = np.mean(gaps)
+    sigma = np.std(gaps)
+    return miu, sigma
+
 def extract_query_distribution(filename,data,epsilon,ipp):
     """
     input:
@@ -172,8 +187,11 @@ def predict_height_segments(epsilon,epsilon_i,n,k):
 #         dac += term
 #     return dac / ipp
 
-def expected_DAC(epsilon, ipp):
-    return 1 + (2*epsilon/ipp)
+def expected_DAC(epsilon, ipp ,s="all_in_once"):
+    if s == "all_in_once":
+        return 1 + (2*epsilon/ipp)
+    elif s == "one_by_one":
+        return 1 + (epsilon/ipp)
 
 def expected_IAC(epsilon, ipp):
     return 1 + (2*epsilon/ipp)
@@ -226,7 +244,7 @@ def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_fi
     print((1-h)*RDAC.sum()/len(queries))
     return (1-h)*RDAC.sum()/len(queries), h
     
-def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="", data_file=""):
+def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="", data_file="",s="one_by_one"):
     M_index = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
     C = M_buffer/ps
@@ -249,37 +267,54 @@ def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="
         
         h = validate_ratio(buffer_ratio)
 
-    return (1 - h) * expected_DAC(epsilon, ipp), h
+    return (1 - h) * expected_DAC(epsilon, ipp, s), h
 
 
 def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file=""):
+    data = f"{DATASETS_DIRECTORY}{data_file}"
+    query = f"{DATASETS_DIRECTORY}{query_file}"
     eps_list = []
     cost_list = []
     h_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
     for eps in range(least_eps, 129):
-        cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query_file, data_file)
+        cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query, data)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
     print(eps_list)
     print("cost:",cost_list)
     print("ratio:",h_list)
+    
+    log_filename = f"{query_file}.log".replace(".bin","")
+    with open(LOG_DIRECTORY+log_filename,'a') as f:
+        f.write("M,epsilon,cost,ratio\n")
+        for i in range(len(cost_list)):
+            f.write(f"{M>>20},{eps_list[i]},{cost_list[i]},{h_list[i]}\n")
     return eps_list, cost_list
 
-def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file=""):
+def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file="",s="one_by_one"):
+    data = f"{DATASETS_DIRECTORY}{data_file}"
+    query = f"{DATASETS_DIRECTORY}{query_file}"
     eps_list = []
     cost_list = []
     h_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(least_eps, 65):
-        cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query_file, data_file)
+    for eps in range(least_eps, 257, 2):
+        cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
     print(eps_list)
     print("cost:",cost_list)
     print("ratio:",h_list)
+    
+    log_filename = f"{query_file}.log".replace(".bin","")
+    with open(LOG_DIRECTORY+log_filename,'a') as f:
+        f.write("M,epsilon,cost,ratio\n")
+        for i in range(len(cost_list)):
+            f.write(f"{M>>20},{eps_list[i]},{cost_list[i]},{h_list[i]}\n")
+        
     return eps_list, cost_list
 
 def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
@@ -300,14 +335,13 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
 
 def main():
     M = 120*1024*1024
-    data_file = f"{DATASETS_DIRECTORY}books_50M_uint64_unique"
-    query_file = f"{DATASETS_DIRECTORY}books_50M_uint64_unique.query.bin"
-    # getOptimalEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,type="sample")
+    data_file = f"books_50M_uint64_unique"
+    query_file = f"books_50M_uint64_unique.query.bin"
     eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(5e7),ps=4096,type="sample",
-                                                   data_file=data_file,query_file=query_file)
+                                                   data_file=data_file,query_file=query_file,s="all_in_once")
     
-    # data_file = f"{DATASETS_DIRECTORY}fb_20M_uint64_unique"
-    # query_file = f"{DATASETS_DIRECTORY}range_query_fb_uu.bin"
+    # data_file = f"fb_20M_uint64_unique"
+    # query_file = f"range_query_fb_uu.bin"
     # getExpectedRangeCostPerEpsilon(n=int(2e7),seg_size=16,M=M,ipp=512,ps=4096,query_file=query_file,data_file=data_file)
 if __name__ == "__main__":
     main()

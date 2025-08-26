@@ -106,22 +106,55 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
     return nullptr; // 没找到
 }
 
+const bool binary_search_record(std::vector<pgm::Record> records, size_t lo, size_t hi, KeyType target_key){
+    int64_t left = lo;
+    int64_t right = hi;
+    while (left <= right) {
+        int64_t mid = (right + left) / 2;
+        KeyType key = records[mid].key;
+        if (key < target_key) {
+            left = mid + 1;
+        } else if(key > target_key){
+            right = mid - 1;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
 
 
 int main() {
     std::string filename = "fb_20M_uint64_unique";
-    std::string query_filename = "range_query_fb_uu.bin";
+    // std::string query_filename = "range_query_fb_uu.bin";
     std::string file = DATASETS + filename;
-    std::string query_file = DATASETS + query_filename;
+    // std::string query_file = DATASETS + query_filename;
     std::vector<KeyType> data = load_data(file);
-    std::vector<RangeQuery> queries = load_queries(query_file);
-    const size_t MemoryBudget = 20*1024*1024;
-    pgm::PGMIndex<KeyType, 16, MemoryBudget, pgm::CacheStrategy::LRU, pgm::CacheType::DATA> index(data,file);
-    std::vector<KeyType> res = index.range_search(5237953133,5255844371);
-    for (auto &it:res){
-        std::cout << it << ",";
+    // std::vector<RangeQuery> queries = load_queries(query_file);
+    const size_t MemoryBudget = 80*1024*1024;
+    size_t query = 112983;
+    pgm::PGMIndex<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::LRU);
+    // std::vector<KeyType> res = index.range_search(5237953133,5255844371);
+    auto range = index.search(query,pgm::ALL_IN_ONCE);
+    std::vector<pgm::Record> records = range.records;
+    size_t lo = range.lo;
+    size_t hi = range.hi;
+    bool result = binary_search_record(records,lo,hi,query);
+    if (result){
+        std::cout << "found key " << query << std::endl;
+    }else{
+        std::cout << "not found" << std::endl;
     }
-    std::cout<<std::endl<<res.size()<<std::endl;
+    // const char* result = binary_search_record(buffer, lo, hi, query);
+    // if (result==nullptr){
+    //     std::cout << "not found" << std::endl;
+    // }else{
+    //     std::cout << "found key " << query << std::endl;
+    // }
+    // for (auto &it:res){
+    //     std::cout << it << ",";
+    // }
+    // std::cout<<std::endl<<res.size()<<std::endl;
     
     return 0;
 }

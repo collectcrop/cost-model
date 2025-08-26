@@ -88,14 +88,6 @@ class FIFOCache : public ICache<size_t, Page> {
                     std::vector<Page> pages = triggerIO(index,miss_len);
                     for (int i=0;i<pages.size();i++){
                         size_t idx = miss_begin + i;
-
-                        // Evict if full
-                        if (cache.size() > C) {
-                            size_t old = q.front();
-                            q.pop();
-                            cache.erase(old);
-                        }
-
                         // Insert new page
                         q.push(idx);
                         cache[idx] = std::move(pages[i]);
@@ -111,26 +103,30 @@ class FIFOCache : public ICache<size_t, Page> {
                 if (miss_begin == (size_t)-1) miss_begin = index;
                 this->cache_misses++;
             }
-
-            // flush tail miss
-            if (miss_begin != (size_t)-1) {
-                size_t miss_len = hi - miss_begin + 1;
-                auto pages = triggerIO(miss_begin, miss_len);
-                for (size_t i = 0; i < pages.size(); i++) {
-                    size_t idx = miss_begin + i;
-                    // Evict if full
-                    if (cache.size() > C) {
-                        size_t old = q.front();
-                        q.pop();
-                        cache.erase(old);
-                    }
-                    q.push(idx);
-                    cache[idx] = std::move(pages[i]);
-                    res.push_back(cache[idx]);
-                }
+            // Evict if full
+            while (cache.size() >= C) {
+                size_t old = q.front();
+                q.pop();
+                cache.erase(old);
             }
-
-            // Not found, later load from disk
+        }
+        // flush tail miss
+        if (miss_begin != (size_t)-1) {
+            size_t miss_len = hi - miss_begin + 1;
+            auto pages = triggerIO(miss_begin, miss_len);
+            for (size_t i = 0; i < pages.size(); i++) {
+                size_t idx = miss_begin + i;
+                
+                q.push(idx);
+                cache[idx] = std::move(pages[i]);
+                res.push_back(cache[idx]);
+            }
+        }
+        // Evict if full
+        while (cache.size() >= C) {
+            size_t old = q.front();
+            q.pop();
+            cache.erase(old);
         }
         
         return res;    

@@ -127,6 +127,22 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 
     return nullptr; // 没找到
 }
+const bool binary_search_record(pgm::Record* records, size_t lo, size_t hi, KeyType target_key){
+    size_t left = lo/ITEM_PER_PAGE;
+    size_t right = hi/ITEM_PER_PAGE;
+    while (left <= right) {
+        size_t mid = (right + left) / 2;
+        KeyType key = records[mid].key;
+        if (key < target_key) {
+            left = mid + 1;
+        } else if(key > target_key){
+            right = mid - 1;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
 
 template <size_t Epsilon, size_t M>
 BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<RangeQuery> queries,std::string filename,pgm::CacheStrategy s) {
@@ -137,7 +153,7 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<RangeQuery> quer
         if (++cnt==queries.size()/3) std::cout << "33% finished" << std::endl;
         else if (cnt==queries.size()/2) std::cout << "50% finished" << std::endl;
         else if (cnt==queries.size()*4/5) std::cout << "80% finished" << std::endl;
-        auto range = index.range_search(q.lo,q.hi,pgm::RangeSearchStrategy::MID);
+        auto range = index.range_search(q.lo,q.hi,pgm::RangeSearchStrategy::LO);
     }
     auto t1 = timer::now();
     auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
@@ -189,7 +205,7 @@ int main() {
     std::string query_file = DATASETS + query_filename;
     std::vector<KeyType> data = load_data(file);
     std::vector<RangeQuery> queries = load_queries(query_file);
-    const size_t MemoryBudget = 80*1024*1024;
+    const size_t MemoryBudget = 40*1024*1024;
     
     int trials = 1;    
 

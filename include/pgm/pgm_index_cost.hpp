@@ -48,6 +48,7 @@ using ::Page;
 #define PAGE_SIZE 4096
 #define SEGMENT_FILE "pgm_test_file_seg.bin"
 #define ITEM_PER_PAGE (PAGE_SIZE / RECORD_SIZE)
+#define DEBUG true
 /**
  * A struct that stores the result of a query to a @ref PGMIndex, that is, a range [@ref lo, @ref hi)
  * centered around an approximate position @ref pos of the sought key.
@@ -56,12 +57,6 @@ struct ApproxPos {
     size_t pos; ///< The approximate position of the key.
     size_t lo;  ///< The lower bound of the range.
     size_t hi;  ///< The upper bound of the range.
-};
-
-struct ApproxPosExt {
-    std::vector<char> buffer;
-    size_t lo;      // minimal pos in buffer
-    size_t hi;      // maximal pos in buffer
 };
 
 typedef enum CacheType {
@@ -81,6 +76,11 @@ typedef enum RangeSearchStrategy {
     HI
 } RangeSearchStrategy;
 
+typedef enum SearchStrategy {
+    ALL_IN_ONCE,
+    ONE_BY_ONE
+} SearchStrategy;
+
 typedef struct Record {
     uint64_t key;
     bool operator<(const Record& other) const {
@@ -88,6 +88,11 @@ typedef struct Record {
     }
 } Record;
 
+struct ApproxPosExt {
+    std::vector<Record> records;  // record buffer
+    size_t lo;      // minimal pos in buffer
+    size_t hi;      // maximal pos in buffer
+};
 #define RECORD_SIZE sizeof(Record)
 
 /**
@@ -285,8 +290,8 @@ public:
 
     static constexpr size_t epsilon_value = Epsilon;
     // mutable PageCache cache;
-    // mutable std::unique_ptr<PageCache> cache,seg_cache;
-    mutable std::unique_ptr<ICache<size_t, pgm::Page>> cache,seg_cache;
+    // mutable std::shared_ptr<PageCache> cache,seg_cache;
+    mutable std::shared_ptr<ICache<size_t, pgm::Page>> cache,seg_cache;
 
     /**
      * Constructs an empty index.
@@ -310,14 +315,15 @@ public:
           first_key(n ? *first : K(0)),
           segments(),
           levels_offsets() {
-        // data_fd = open(filename.c_str(),O_RDONLY|O_DIRECT);      // test for real IO time
-        data_fd = open(filename.c_str(),O_RDONLY);                  // test for IOs
+        data_fd = open(filename.c_str(),O_RDONLY|O_DIRECT);      // test for real IO time
+        // data_fd = open(filename.c_str(),O_RDONLY);                  // test for IOs
         if (data_fd < 0)
             throw std::runtime_error("Cannot open data file");
         build(first, last, Epsilon, EpsilonRecursive, segments, levels_offsets);
         seg_fd = open(SEGMENT_FILE,O_RDONLY|O_DIRECT);
-        if (data_fd < 0)
+        if (seg_fd < 0)
             throw std::runtime_error("Cannot open segment file");
+        
         if (type==SEGMENT){     // ||(ssize_t)(MemoryBudget-n*sizeof(Segment)/(2*Epsilon))<=0
             std::cout<<"Segment cache"<<std::endl;
             if (strategy == LRU) {
@@ -358,9 +364,9 @@ public:
     /**
      * Returns the approximate position and the range where @p key can be found.
      * @param key the value of the element to search for
-     * @return a memory buffer with the approximate position and bounds of the range
+     * @return a record vector with the approximate position and bounds of the range
      */
-    ApproxPosExt search(const K &key) const {
+    ApproxPosExt search(const K &key, SearchStrategy s=ONE_BY_ONE)const {
         auto k = std::max(first_key, key);\
         size_t pos;
         if (type==DATA){
@@ -372,17 +378,37 @@ public:
         }
         auto lo = PGM_SUB_EPS(pos, Epsilon);
         auto hi = PGM_ADD_EPS(pos, Epsilon, n);
-        std::vector<char> buffer;
-        for (size_t pageIndex=lo/ITEM_PER_PAGE; pageIndex<=hi/ITEM_PER_PAGE; pageIndex++){
-            Page& page = cache->get(pageIndex);
-            buffer.insert(buffer.end(), page.data.get(), page.data.get() + page.valid_len);
+
+        // all-in-once
+        if (s == ALL_IN_ONCE) {
+            std::vector<Record> buffer;
+            std::vector<Page> pages = cache->get(lo / ITEM_PER_PAGE, hi / ITEM_PER_PAGE);
+
+            for (auto &page : pages) {
+                size_t num_records = page.valid_len / sizeof(Record);   // valid record num
+                Record* records = reinterpret_cast<Record*>(page.data.get());
+                buffer.insert(buffer.end(), records, records + num_records);
+            }
+
+            size_t page_lo = lo / ITEM_PER_PAGE;
+            size_t rel_lo = lo % ITEM_PER_PAGE;
+            size_t rel_hi = std::min(hi - page_lo * ITEM_PER_PAGE, buffer.size());
+
+            return {std::move(buffer), rel_lo, rel_hi};
         }
-
-        size_t page_lo = lo / ITEM_PER_PAGE;
-        size_t rel_lo = lo % ITEM_PER_PAGE;
-        size_t rel_hi = std::min(hi - page_lo * ITEM_PER_PAGE,buffer.size());
-
-        return {buffer, rel_lo, rel_hi};
+        else{       // one-by-one
+            Page page;
+            Record* records = nullptr;
+            for (size_t pageIndex=lo/ITEM_PER_PAGE;pageIndex<=hi/ITEM_PER_PAGE;pageIndex++){
+                page = cache->get(pageIndex);
+                records = reinterpret_cast<Record*>(page.data.get());
+                if (records[page.valid_len/sizeof(Record) - 1].key>=key)    break;
+            }
+            size_t num_records = page.valid_len / sizeof(Record);
+            std::vector<Record> buffer(records, records + num_records);
+            size_t size = buffer.size(); 
+            return {std::move(buffer), 0, size};
+        }
     }
 
     /**
@@ -391,49 +417,61 @@ public:
      * @param hi the target keys upper bound
      * @return a vector contains all keys in provided range.
      */
-    std::vector<K> range_search(const K &lo, const K &hi, RangeSearchStrategy s=MID){
+    std::vector<K> range_search(const K &lo, const K &hi, RangeSearchStrategy s=LO){
         std::vector<K> res;
         if (hi<first_key) return res;
         // one-by-one strategy
-        // K tar;
-        // switch(s){
-        //     case MID:
-        //         tar = (lo+hi)/2;
-        //         break;
-        //     case LO:
-        //         tar = lo;
-        //         break;
-        //     case HI:
-        //         tar = hi;
-        //         break;
-        // }
-        // auto it = segment_for_key(tar);
-        // size_t pos = std::min<size_t>((*it)(tar), std::next(it)->intercept);
-        // size_t pageIndex = pos/ITEM_PER_PAGE;
-        // Page* page = &cache->get(pageIndex);
-        // K l,r;
-        // std::pair<K,K> lr;
-        // lr = inner_search(*page,res,lo,hi);l=lr.first;r=lr.second;
-        // while (l==0&&pageIndex>0){
-        //     page = &cache->get(--pageIndex);
-        //     lr = inner_search(*page,res,lo,hi);
-        //     l = lr.first;
-        // }
-        // while (r==ITEM_PER_PAGE-1){
-        //     page = &cache->get(++pageIndex);
-        //     lr = inner_search(*page,res,lo,hi);
-        //     r = lr.second;
-        // }
+        K tar;
+        switch(s){
+            case MID:
+                tar = (lo+hi)/2;
+                break;
+            case LO:
+                tar = lo;
+                break;
+            case HI:
+                tar = hi;
+                break;
+        }
+        auto it = segment_for_key(tar);
+        size_t pos = std::min<size_t>((*it)(tar), std::next(it)->intercept);
+        size_t pageIndex = pos/ITEM_PER_PAGE;
+        Page* page = &cache->get(pageIndex);
+        K l,r;
+        std::pair<K,K> lr;
+        lr = inner_search(*page,res,lo,hi);l=lr.first;r=lr.second;
+        size_t p = pageIndex;
+        while (l==0&&p>0){
+            page = &cache->get(--p);
+            lr = inner_search(*page,res,lo,hi);
+            l = lr.first;
+        }
+        p = pageIndex;
+        while (r==ITEM_PER_PAGE-1){
+            page = &cache->get(++p);
+            lr = inner_search(*page,res,lo,hi);
+            r = lr.second;
+        }
 
         // all-in-once strategy
-        auto it_lo = segment_for_key(lo);
-        auto it_hi = segment_for_key(hi);
-        size_t pos_lo = std::min<size_t>((*it_lo)(lo), std::next(it_lo)->intercept);
-        size_t pos_hi = std::min<size_t>((*it_hi)(hi), std::next(it_hi)->intercept);
-        size_t page_lo = std::max(0,pos_lo-Epsilon)/ITEM_PER_PAGE;
-        size_t page_hi = std::min(n,pos_hi+Epsilon)/ITEM_PER_PAGE;
+        // auto it_lo = segment_for_key(lo);
+        // auto it_hi = segment_for_key(hi);
+        // size_t pos_lo = std::min<size_t>((*it_lo)(lo), std::next(it_lo)->intercept);
+        // size_t pos_hi = std::min<size_t>((*it_hi)(hi), std::next(it_hi)->intercept);
+        // size_t page_lo = std::max((size_t)0,pos_lo-Epsilon)/ITEM_PER_PAGE;
+        // size_t page_hi = std::min(n,pos_hi+Epsilon)/ITEM_PER_PAGE;
+        // std::vector<Page> pages = cache->get(page_lo,page_hi);
 
-
+        // for (auto &page:pages){
+        //     if (reinterpret_cast<Record*>(page.data.get())[page.valid_len / sizeof(Record) - 1].key<lo) continue;
+        //     else if (reinterpret_cast<Record*>(page.data.get())[0].key>hi) break;
+        //     for (size_t i = 0; i < page.valid_len / sizeof(Record); i++) {
+        //         K key = reinterpret_cast<Record*>(page.data.get())[i].key;
+        //         if (key >= lo && key <= hi) {
+        //             res.push_back(key);
+        //         }
+        //     }
+        // }
         return res;
     }
 
@@ -468,7 +506,7 @@ public:
      * Returns the size of the index in bytes.
      * @return the size of the index in bytes
      */
-    size_t size_in_bytes() const { return segments.size() * sizeof(Segment) + levels_offsets.size() * sizeof(size_t); }
+    size_t size_in_bytes() const { return segments.size() * sizeof(Segment); }  // + levels_offsets.size() * sizeof(size_t)
 
     /**
      * Returns the level offsets.

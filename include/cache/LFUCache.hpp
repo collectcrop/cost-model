@@ -119,17 +119,6 @@ class LFUCache : public ICache<size_t, Page> {
                     auto pages = triggerIO(miss_begin, miss_len);
                     for (size_t i = 0; i < pages.size(); i++) {
                         size_t idx = miss_begin + i;
-
-                        if (cache.size() >= C) {
-                            // evict LFU
-                            size_t old = freq_to_keys[min_freq].front();
-                            freq_to_keys[min_freq].pop_front();
-                            if (freq_to_keys[min_freq].empty()) {
-                                freq_to_keys.erase(min_freq);
-                            }
-                            cache.erase(old);
-                        }
-
                         freq_to_keys[1].push_back(idx);
                         cache[idx] = CacheEntry{std::move(pages[i]), 1, --freq_to_keys[1].end()};
                         res.push_back(cache[idx].page);
@@ -158,6 +147,16 @@ class LFUCache : public ICache<size_t, Page> {
                 if (miss_begin == (size_t)-1) miss_begin = index;
                 this->cache_misses++;
             }
+            
+            while (cache.size() >= C) {
+                // evict LFU
+                size_t old = freq_to_keys[min_freq].front();
+                freq_to_keys[min_freq].pop_front();
+                if (freq_to_keys[min_freq].empty()) {
+                    freq_to_keys.erase(min_freq);
+                }
+                cache.erase(old);
+            }
         }
 
         // --- flush tail miss ---
@@ -166,24 +165,22 @@ class LFUCache : public ICache<size_t, Page> {
             auto pages = triggerIO(miss_begin, miss_len);
             for (size_t i = 0; i < pages.size(); i++) {
                 size_t idx = miss_begin + i;
-
-                if (cache.size() >= C) {
-                    // evict LFU
-                    size_t old = freq_to_keys[min_freq].front();
-                    freq_to_keys[min_freq].pop_front();
-                    if (freq_to_keys[min_freq].empty()) {
-                        freq_to_keys.erase(min_freq);
-                    }
-                    cache.erase(old);
-                }
-
                 freq_to_keys[1].push_back(idx);
                 cache[idx] = CacheEntry{std::move(pages[i]), 1, --freq_to_keys[1].end()};
                 res.push_back(cache[idx].page);
             }
             min_freq = 1;
         }
-
+        
+        while (cache.size() >= C) {
+            // evict LFU
+            size_t old = freq_to_keys[min_freq].front();
+            freq_to_keys[min_freq].pop_front();
+            if (freq_to_keys[min_freq].empty()) {
+                freq_to_keys.erase(min_freq);
+            }
+            cache.erase(old);
+        }
         return res;
     }
 

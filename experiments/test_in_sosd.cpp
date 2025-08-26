@@ -5,6 +5,10 @@
  * Run with:
  *   ./simple
  */
+#include <sched.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #include <iostream>
 #include <fstream>
@@ -107,18 +111,35 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
     return nullptr; // 没找到
 }
 
+const bool binary_search_record(std::vector<pgm::Record> records, size_t lo, size_t hi, KeyType target_key){
+    int64_t left = lo;
+    int64_t right = hi;
+    while (left <= right) {
+        int64_t mid = (right + left) / 2;
+        KeyType key = records[mid].key;
+        if (key < target_key) {
+            left = mid + 1;
+        } else if(key > target_key){
+            right = mid - 1;
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <size_t Epsilon, size_t M>
 BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries,std::string filename, pgm::CacheStrategy s) {
     pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s);
     auto t0 = timer::now();
     int cnt = 0;
     for (auto &q : queries) {
-        if (++cnt==queries.size()/2) std::cout << "50% finished" << std::endl;
-        auto range = index.search(q);
-        std::vector<char> buffer = range.buffer;
+        // if (++cnt==queries.size()/2) std::cout << "50% finished" << std::endl;
+        auto range = index.search(q, pgm::ALL_IN_ONCE);
+        std::vector<pgm::Record> records = range.records;
         size_t lo = range.lo;
         size_t hi = range.hi;
-        const char* result = binary_search_record(buffer, lo, hi, q);
+        const bool result = binary_search_record(records, lo, hi, q);
     }
     auto t1 = timer::now();
     auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
@@ -131,7 +152,7 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries
     size_t total_access = cache->get_hit_count() + cache->get_miss_count();
     size_t index_total_hits = index_cache->get_hit_count();
     size_t index_total_access = index_cache->get_hit_count() + index_cache->get_miss_count();
-
+    std::cout << "C=" << cache->get_C() << std::endl; 
     BenchmarkResult result;
     result.epsilon = Epsilon;
     result.time_ns = query_ns;
@@ -162,20 +183,29 @@ std::string mk_outfilename(pgm::CacheStrategy s,std::string dataset,size_t ds, s
 }
 
 int main() {
+    // cpu_set_t mask;
+    // CPU_ZERO(&mask);
+    // CPU_SET(13, &mask);   // bind to CPU 13
+
+    // if (sched_setaffinity(0, sizeof(mask), &mask) == -1) {
+    //     perror("sched_setaffinity");
+    //     return 1;
+    // }
+
     std::string dataset = "books";
     std::string filename = "books_50M_uint64_unique";
-    std::string query_filename = "books_50M_uint64_unique.query.bin";
+    std::string query_filename = "books_50M_uint64_unique.10Mquery.bin";
     std::string file = DATASETS + filename;
     std::string query_file = DATASETS + query_filename;
     std::vector<KeyType> data = load_data(file);
     std::vector<KeyType> queries = load_queries(query_file);
-    const size_t MemoryBudget = 120*1024*1024;
+    const size_t MemoryBudget = 80*1024*1024;
     
     int trials = 1;
-    for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU}){
+    for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU}){     //pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU
         std::ofstream ofs(mk_outfilename(s,dataset,50,MemoryBudget>>20));
         ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,avg_index_cache_hit_ratio,data_IOs\n";
-        for (size_t epsilon : {2,4,6,8,9,10,12,14,16,18,20,24,28,32,40,48,56,64}) {     //8,10,12,14,16,18,20,24,28,32,40,48,56,64
+        for (size_t epsilon : {8,10,12,14,16,18,20,24,32,48,64,128,256}) {     //8,10,12,14,16,18,20,24,32,48,64,128,256
             BenchmarkResult result;
             switch (epsilon) {
                 case 2: result = benchmark<2, MemoryBudget>(data, queries, file, s); break;
@@ -207,7 +237,8 @@ int main() {
                 case 48: result = benchmark<48, MemoryBudget>(data, queries, file, s); break;
                 case 56: result = benchmark<56, MemoryBudget>(data, queries, file, s); break;
                 case 64: result = benchmark<64, MemoryBudget>(data, queries, file, s); break;
-                // case 128: result = benchmark<128, MemoryBudget>(data, queries, file, s); break;
+                case 128: result = benchmark<128, MemoryBudget>(data, queries, file, s); break;
+                case 256: result = benchmark<256, MemoryBudget>(data, queries, file, s); break;
             }
 
             std::cout << "ε=" << result.epsilon

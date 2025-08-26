@@ -19,7 +19,7 @@
 #include <chrono>
 
 struct Page{
-    std::unique_ptr<char[]> data;
+    std::shared_ptr<char[]> data;
     size_t valid_len=0;
 };
 using timer = std::chrono::high_resolution_clock;
@@ -72,7 +72,7 @@ public:
         if (posix_memalign(&raw_ptr, PAGE_SIZE, PAGE_SIZE * page_num) != 0) {
             throw std::runtime_error("posix_memalign failed");
         }
-        std::unique_ptr<char[]> agg_data(reinterpret_cast<char*>(raw_ptr));
+        std::shared_ptr<char[]> agg_data(reinterpret_cast<char*>(raw_ptr));
 
         off_t offset = index * PAGE_SIZE;
         auto t0 = timer::now();
@@ -97,7 +97,7 @@ public:
             }
             page.data.reset(reinterpret_cast<char*>(page_ptr));
 
-            size_t copy_size = std::min(static_cast<size_t>(bytes - i * PAGE_SIZE), PAGE_SIZE);
+            size_t copy_size = std::min(static_cast<size_t>(bytes - i * PAGE_SIZE), (size_t)PAGE_SIZE);
             memcpy(page.data.get(), agg_data.get() + i * PAGE_SIZE, copy_size);
 
             page.valid_len = copy_size;

@@ -102,13 +102,6 @@ class LRUCache : public ICache<size_t, Page> {
                     auto pages = triggerIO(miss_begin, miss_len);
                     for (size_t i = 0; i < pages.size(); i++) {
                         size_t idx = miss_begin + i;
-
-                        // eviction
-                        if (cache.size() >= C) {
-                            size_t old = lru.back(); lru.pop_back();
-                            cache.erase(old);
-                        }
-
                         lru.push_front(idx);
                         cache[idx] = CacheEntry{std::move(pages[i]), lru.begin()};
                         res.push_back(cache[idx].page);
@@ -128,6 +121,11 @@ class LRUCache : public ICache<size_t, Page> {
                 if (miss_begin == (size_t)-1) miss_begin = index;
                 this->cache_misses++;
             }
+            // eviction
+            while (cache.size() >= C) {
+                size_t old = lru.back(); lru.pop_back();
+                cache.erase(old);
+            }
         }
 
         // --- flush tail miss ---
@@ -136,17 +134,16 @@ class LRUCache : public ICache<size_t, Page> {
             auto pages = triggerIO(miss_begin, miss_len);
             for (size_t i = 0; i < pages.size(); i++) {
                 size_t idx = miss_begin + i;
-
-                // eviction
-                if (cache.size() >= C) {
-                    size_t old = lru.back(); lru.pop_back();
-                    cache.erase(old);
-                }
-
+                if (cache.find(idx) != cache.end()) continue;
                 lru.push_front(idx);
                 cache[idx] = CacheEntry{std::move(pages[i]), lru.begin()};
                 res.push_back(cache[idx].page);
             }
+        }
+        // eviction
+        while (cache.size() >= C) {
+            size_t old = lru.back(); lru.pop_back();
+            cache.erase(old);
         }
 
         return res;
