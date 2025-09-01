@@ -133,18 +133,21 @@ int main() {
     // std::vector<RangeQuery> queries = load_queries(query_file);
     const size_t MemoryBudget = 80*1024*1024;
     size_t query = 112983;
-    pgm::PGMIndex<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::LRU);
+    pgm::PGMIndex<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::FIFO);
     // std::vector<KeyType> res = index.range_search(5237953133,5255844371);
     auto range = index.search(query,pgm::ALL_IN_ONCE);
     std::vector<pgm::Record> records = range.records;
     size_t lo = range.lo;
     size_t hi = range.hi;
     bool result = binary_search_record(records,lo,hi,query);
-    if (result){
-        std::cout << "found key " << query << std::endl;
-    }else{
-        std::cout << "not found" << std::endl;
-    }
+    // if (result){
+    //     std::cout << "found key " << query << std::endl;
+    // }else{
+    //     std::cout << "not found" << std::endl;
+    // }
+    std::cout << "Height: " << index.height() << std::endl;
+    auto cache = index.get_data_cache();
+    std::cout << "IO time: " << cache->get_IO_time() << std::endl;
     // const char* result = binary_search_record(buffer, lo, hi, query);
     // if (result==nullptr){
     //     std::cout << "not found" << std::endl;

@@ -81,7 +81,7 @@ public:
         auto query_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
         // std::cout << "Reading page " << index << " took " << query_ns << " ns" << std::endl;
         IO_time += query_ns;
-        IOs++;
+        IOs += page_num;
         if (bytes < 0){
             std::cout << fd << std::endl; 
             throw std::runtime_error("Failed to read data from disk at offset " + std::to_string(offset));

@@ -334,10 +334,10 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
     
 
 def main():
-    M = 120*1024*1024
-    data_file = f"books_50M_uint64_unique"
-    query_file = f"books_50M_uint64_unique.query.bin"
-    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(5e7),ps=4096,type="sample",
+    M = 80*1024*1024
+    data_file = f"books_20M_uint64_unique"
+    query_file = f"books_20M_uint64_unique.1Mtable.bin"
+    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,type="sample",
                                                    data_file=data_file,query_file=query_file,s="all_in_once")
     
     # data_file = f"fb_20M_uint64_unique"

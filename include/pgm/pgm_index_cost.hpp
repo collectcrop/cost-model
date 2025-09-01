@@ -369,6 +369,7 @@ public:
     ApproxPosExt search(const K &key, SearchStrategy s=ONE_BY_ONE)const {
         auto k = std::max(first_key, key);\
         size_t pos;
+        // auto t0 = timer::now();
         if (type==DATA){
             auto it = segment_for_key(k);
             pos = std::min<size_t>((*it)(k), std::next(it)->intercept);
@@ -376,14 +377,18 @@ public:
             auto idx = segment_for_key_disk(k);
             pos = std::min<size_t>((*get_segment_ptr(idx))(k),get_segment_ptr(idx+1)->intercept);
         }
+        // auto t1 = timer::now();
+        // std::cout << "Index time:" << std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count() << std::endl;
         auto lo = PGM_SUB_EPS(pos, Epsilon);
         auto hi = PGM_ADD_EPS(pos, Epsilon, n);
 
         // all-in-once
         if (s == ALL_IN_ONCE) {
             std::vector<Record> buffer;
+            // auto t0 = timer::now();
             std::vector<Page> pages = cache->get(lo / ITEM_PER_PAGE, hi / ITEM_PER_PAGE);
-
+            // auto t1 = timer::now();
+            // std::cout << "Cache time:" << std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count() << std::endl;
             for (auto &page : pages) {
                 size_t num_records = page.valid_len / sizeof(Record);   // valid record num
                 Record* records = reinterpret_cast<Record*>(page.data.get());
@@ -417,65 +422,67 @@ public:
      * @param hi the target keys upper bound
      * @return a vector contains all keys in provided range.
      */
-    std::vector<K> range_search(const K &lo, const K &hi, RangeSearchStrategy s=LO){
+    std::vector<K> range_search(const K &lo, const K &hi, std::vector<K> target={}, SearchStrategy s=ONE_BY_ONE){
         std::vector<K> res;
         if (hi<first_key) return res;
+        size_t p = 0;   // current target index
         // one-by-one strategy
-        K tar;
-        switch(s){
-            case MID:
-                tar = (lo+hi)/2;
-                break;
-            case LO:
-                tar = lo;
-                break;
-            case HI:
-                tar = hi;
-                break;
-        }
-        auto it = segment_for_key(tar);
-        size_t pos = std::min<size_t>((*it)(tar), std::next(it)->intercept);
-        size_t pageIndex = pos/ITEM_PER_PAGE;
-        Page* page = &cache->get(pageIndex);
-        K l,r;
-        std::pair<K,K> lr;
-        lr = inner_search(*page,res,lo,hi);l=lr.first;r=lr.second;
-        size_t p = pageIndex;
-        while (l==0&&p>0){
-            page = &cache->get(--p);
-            lr = inner_search(*page,res,lo,hi);
-            l = lr.first;
-        }
-        p = pageIndex;
-        while (r==ITEM_PER_PAGE-1){
-            page = &cache->get(++p);
-            lr = inner_search(*page,res,lo,hi);
-            r = lr.second;
-        }
+        if (s==ONE_BY_ONE){
+            auto it = segment_for_key(lo);
+            size_t pos = std::min<size_t>((*it)(lo), std::next(it)->intercept);
+            size_t pageIndex = pos/ITEM_PER_PAGE;
+            Page* page = &cache->get(pageIndex);
+            K l,r;
+            std::pair<K,K> lr;
+            lr = inner_search(*page,res,lo,hi,p,target);l=lr.first;r=lr.second;
+            size_t p = pageIndex;
+            while (l==0&&p>0){
+                page = &cache->get(--p);
+                lr = inner_search(*page,res,lo,hi,p,target);
+                l = lr.first;
+            }
+            p = pageIndex;
+            while (r==ITEM_PER_PAGE-1){
+                page = &cache->get(++p);
+                lr = inner_search(*page,res,lo,hi,p,target);
+                r = lr.second;
+            }
+        }else{      // all-in-once strategy
+            auto it_lo = segment_for_key(lo);
+            auto it_hi = segment_for_key(hi);
+            int64_t pos_lo = std::min<int64_t>((*it_lo)(lo), std::next(it_lo)->intercept);
+            int64_t pos_hi = std::min<int64_t>((*it_hi)(hi), std::next(it_hi)->intercept);
+            int64_t page_lo = std::max<int64_t>((int64_t)0,pos_lo-(int64_t)Epsilon)/ITEM_PER_PAGE;
+            int64_t page_hi = std::min<int64_t>(n,pos_hi+(int64_t)Epsilon)/ITEM_PER_PAGE;
+            std::vector<Page> pages = cache->get(page_lo,page_hi);
 
-        // all-in-once strategy
-        // auto it_lo = segment_for_key(lo);
-        // auto it_hi = segment_for_key(hi);
-        // size_t pos_lo = std::min<size_t>((*it_lo)(lo), std::next(it_lo)->intercept);
-        // size_t pos_hi = std::min<size_t>((*it_hi)(hi), std::next(it_hi)->intercept);
-        // size_t page_lo = std::max((size_t)0,pos_lo-Epsilon)/ITEM_PER_PAGE;
-        // size_t page_hi = std::min(n,pos_hi+Epsilon)/ITEM_PER_PAGE;
-        // std::vector<Page> pages = cache->get(page_lo,page_hi);
-
-        // for (auto &page:pages){
-        //     if (reinterpret_cast<Record*>(page.data.get())[page.valid_len / sizeof(Record) - 1].key<lo) continue;
-        //     else if (reinterpret_cast<Record*>(page.data.get())[0].key>hi) break;
-        //     for (size_t i = 0; i < page.valid_len / sizeof(Record); i++) {
-        //         K key = reinterpret_cast<Record*>(page.data.get())[i].key;
-        //         if (key >= lo && key <= hi) {
-        //             res.push_back(key);
-        //         }
-        //     }
-        // }
+            for (auto &page:pages){
+                if (reinterpret_cast<Record*>(page.data.get())[page.valid_len / sizeof(Record) - 1].key<lo) continue;
+                else if (reinterpret_cast<Record*>(page.data.get())[0].key>hi) break;
+                for (size_t i = 0; i < page.valid_len / sizeof(Record); i++) {
+                    K key = reinterpret_cast<Record*>(page.data.get())[i].key;
+                    if (target.size()!=0){
+                        while (p<target.size()&&target[p]<key) p++;
+                        if (p >= target.size()) return res;
+                        while (key >= lo && key <= hi && key == target[p]) {
+                            res.push_back(key);
+                            p++;
+                        }
+                        if(key>hi) {
+                            return res;
+                        }
+                    }else{
+                        if (key >= lo && key <= hi) {
+                            res.push_back(key);
+                        }
+                    }
+                }
+            }
+        }    
         return res;
     }
 
-    std::pair<K,K> inner_search(Page &p, std::vector<K>& res, K lo, K hi){
+    std::pair<K,K> inner_search(Page &p, std::vector<K>& res, K lo, K hi, size_t &idx, std::vector<K> target={}){
         Record* recs = reinterpret_cast<Record*>(p.data.get());
         Record* begin = recs;
         Record* end   = recs + p.valid_len / sizeof(Record);
@@ -486,7 +493,16 @@ public:
             [](K key, const Record& r) { return key < r.key; });
 
         for (auto it=lb;it<ub;it++){
-            res.push_back(it->key);
+            if (target.size()!=0){
+                if (it->key == target[idx]) {
+                    res.push_back(it->key);
+                    idx++;
+                }
+                while (idx<target.size()&&target[idx]<it->key) idx++;
+                if (idx >= target.size()) return {lb-begin,ub-begin-1};
+            }else{
+                res.push_back(it->key);
+            }
         }
         return {lb-begin,ub-begin-1};
     }

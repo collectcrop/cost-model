@@ -1,5 +1,6 @@
 import numpy as np
 import random
+import math
 DATASETS_DIRECTORY = "/mnt/home/zwshi/Datasets/SOSD/"
 
 def generate_realistic_queries_from_data(keys, num_queries=100000, seed=42):
@@ -78,20 +79,138 @@ def generate_range_queries(num_queries, key_space_size,
     queries = list(zip(starts, ends))
     queries = np.array(queries[:num_queries], dtype=np.uint64)
     return queries
+
+def generate_join_table_from_data(keys, num_queries=100000, seed=42, num_segments=5, active_segments=2):
+    """
+    生成带空page gap的 join query:
+      - 将key space划分成num_segments段
+      - 只在active_segments个segment里生成query
+      - 其他segment完全空白，制造page gap
+    """
+
+    np.random.seed(seed)
+    random.seed(seed)
+
+    n = len(keys)
+    seg_size = n // num_segments
+
+    queries = []
+
+    # 随机挑选几个segment作为"热点段"
+    active_idx = random.sample(range(num_segments), active_segments)
+
+    per_segment_queries = num_queries // active_segments
+
+    for seg in active_idx:
+        start = seg * seg_size
+        end = min((seg + 1) * seg_size, n)
+        segment_keys = keys[start:end]
+
+        # 在segment内再制造热点 + 稀疏
+        hotspot_ratio = 0.6
+        hotspot_queries = int(per_segment_queries * hotspot_ratio)
+        uniform_queries = per_segment_queries - hotspot_queries
+
+        # hotspot: 取该segment内的小范围
+        hotspot_size = max(1, int(0.05 * len(segment_keys)))
+        base = random.randint(0, len(segment_keys) - hotspot_size)
+        hot_indices = np.random.zipf(1.5, hotspot_queries)
+        hot_indices = np.clip(hot_indices, 0, hotspot_size - 1)
+        queries.extend(segment_keys[base + hot_indices])
+
+        # uniform: 均匀取整个segment
+        take = min(uniform_queries, len(segment_keys))
+        print('uniform:',take)
+        queries.extend(np.random.choice(segment_keys, size=take, replace=False))
+
+    # 转成 numpy array
+    queries = np.array(queries, dtype=np.uint64)
+
+    # 升序
+    join_keys = np.sort(queries)
+    return join_keys
+
+def join_partition(keys, queries, page_size=4096, key_size=8,
+                   lengths_file="", bitmap_file="", delta=37, H=0):
+    """
+    Join-Partition Algorithm
+    input:
+      - keys: 大表升序 key (np.uint64)
+      - queries: join 表升序 key (np.uint64)
+      - page_size: SSD page 大小 (默认 4096B)
+      - key_size: key 大小 (默认 8B)
+    output:
+      - lengths: 每个 partition 的 query 数
+      - bitmap: 每个 partition 的策略 (0=point, 1=range)
+    """
+
+    ipp = page_size // key_size
+    num_pages = int(np.ceil(len(keys) / ipp))
+
+    # 将 key 映射到 page_id
+    key_to_page = np.arange(len(keys)) // ipp
+
+    # 用二分搜索找到 query 的位置 -> 对应 page id
+    query_idx = np.searchsorted(keys, queries)
+    query_idx = np.clip(query_idx, 0, len(keys) - 1)  # 防越界
+    query_pages = key_to_page[query_idx]
+
+    # 统计每个 page 被命中的次数
+    pageCount = np.bincount(query_pages, minlength=num_pages)
+
+    # 划分连续的非零区间
+    partitions = []
+    start = None
+    for i, cnt in enumerate(pageCount):
+        if cnt > 0 and start is None:
+            start = i
+        elif cnt == 0 and start is not None:
+            partitions.append((start, i - 1))
+            start = None
+    if start is not None:
+        partitions.append((start, num_pages - 1))
+    print("Partitions:", partitions)
+    # 生成结果
+    lengths = []
+    bitmap = []
+    for (l, r) in partitions:
+        N = pageCount[l:r+1].sum()
+        K = r - l + 1
+        print("N:",N,"K:",K)
+        mu = N / K
+        lengths.append(N)
+        tau = (page_size+delta+H/K)/(math.log(page_size,2)+H+delta)
+        print("τ:",tau)
+        print("μ:",mu)
+        if mu > tau:
+            bitmap.append(1)  # range
+        else:
+            bitmap.append(0)  # point
+
+    # save to file
+    np.array(lengths, dtype=np.int64).tofile(lengths_file)
+    np.array(bitmap, dtype=np.int8).tofile(bitmap_file)
+
+    return lengths, bitmap
+
+
 def main():
-    num_queries = 10000000
+    
     sizeList = [1e7,2e7,3e7,5e7,7e7,9e7,1e8]
     datasets = ["fb","books","osm_cellids","wiki_ts"]
-    for dataset in datasets:
-        for size in sizeList:
-            print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
-            raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
-            keys = raw[1:]
-            print(f"[*] Loaded {len(keys)} keys.")
-            queries = generate_realistic_queries_from_data(keys,num_queries)
-            queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
-            print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
+    """ point """
+    # num_queries = 10000000
+    # for dataset in datasets:
+    #     for size in sizeList:
+    #         print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
+    #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
+    #         keys = raw
+    #         print(f"[*] Loaded {len(keys)} keys.")
+    #         queries = generate_realistic_queries_from_data(keys,num_queries)
+    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
+    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
     
+    """ range """
     # num_queries = 1000000
     # queries = generate_range_queries(num_queries, 8000000000,
     #                              start_dist='uniform',
@@ -101,5 +220,31 @@ def main():
     #                              )
     # queries.tofile(f"{DATASETS_DIRECTORY}range_query_fb_uu.bin")
     # print(f"[+] save queries to {DATASETS_DIRECTORY}range_query.bin successfully!")
+    
+    """ join """
+    # num_queries = 10000000
+    # for dataset in datasets:
+    #     for size in sizeList:
+    #         print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
+    #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
+    #         keys = raw
+    #         print(f"[*] Loaded {len(keys)} keys.")
+    #         queries = generate_join_table_from_data(keys,num_queries,num_segments=20,active_segments=7)
+    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin")
+    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin successfully!")
+    
+    """ partition join"""
+    page_size = 4096
+    H = 4
+    delta = 37
+    queryfile = "books_20M_uint64_unique.10Mtable.bin"
+    dataset = "books_20M_uint64_unique"
+    raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
+    keys = raw
+    queries = np.fromfile(f"{DATASETS_DIRECTORY}{queryfile}", dtype=np.uint64)
+    lengths_file=f"{DATASETS_DIRECTORY}{queryfile}.par".replace(".bin","")
+    bitmap_file=f"{DATASETS_DIRECTORY}{queryfile}.bitmap".replace(".bin","")
+    join_partition(keys,queries,page_size,lengths_file=lengths_file,bitmap_file=bitmap_file,H=H,delta=delta)
+            
 if __name__ == '__main__':
     main()
