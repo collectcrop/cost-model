@@ -230,8 +230,9 @@ def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_fi
     lo_keys,hi_keys = queries[:,0],queries[:,1]
     pos_lo = np.searchsorted(data, lo_keys, side='right') - 1
     pos_hi = np.searchsorted(data, hi_keys, side='right') - 1
-    keys = pos_hi - pos_lo
-    RDAC = np.ceil(keys/ipp) + np.floor(1-(pos_hi%ipp-pos_lo%ipp)/ipp) + epsilon/ipp
+    # keys = pos_hi - pos_lo
+    # RDAC = np.ceil(keys/ipp) + np.floor(1-(pos_hi%ipp-pos_lo%ipp)/ipp) + 2*epsilon/ipp
+    RDAC = pos_hi/ipp - pos_lo/ipp + 1 + 2*epsilon/ipp
     page_counts = estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, ipp)
     total = sum(page_counts.values())
     q = np.array([f / total for f in page_counts.values()], dtype=np.float64)

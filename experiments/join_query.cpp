@@ -22,6 +22,7 @@
 #include <fstream>
 #include "distribution/zipf.hpp"
 #include "pgm/pgm_index_cost.hpp"
+#include "utils/include.hpp"
 
 using KeyType = uint64_t;
 #define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
@@ -87,7 +88,7 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 
     while (left < right) {
         size_t mid = left + (right - left) / 2;
-        const char* mid_ptr = buffer.data() + mid * RECORD_SIZE;
+        const char* mid_ptr = buffer.data() + mid * pgm::RECORD_SIZE;
         uint64_t mid_key = extract_key(mid_ptr);
 
         if (mid_key < target_key) {
@@ -99,7 +100,7 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 
     // 检查 left 是否就是目标
     if (left < hi) {
-        const char* candidate = buffer.data() + left * RECORD_SIZE;
+        const char* candidate = buffer.data() + left * pgm::RECORD_SIZE;
         uint64_t candidate_key = extract_key(candidate);
         if (candidate_key == target_key) {
             return candidate; // 找到
@@ -159,7 +160,7 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::string query_file,std::
                                 queries.begin() + cur + lengths[i]);
             range = index.range_search(lo, hi, target, pgm::ALL_IN_ONCE);
             cur += lengths[i];
-            std::cout << range.size() << std::endl;
+            // std::cout << range.size() << std::endl;
         }
     }
     auto t1 = timer::now();
@@ -174,7 +175,7 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::string query_file,std::
     size_t total_access = cache->get_hit_count() + cache->get_miss_count();
     size_t index_total_hits = index_cache->get_hit_count();
     size_t index_total_access = index_cache->get_hit_count() + index_cache->get_miss_count();
-    std::cout << "C=" << cache->get_C() << std::endl; 
+    // std::cout << "C=" << cache->get_C() << std::endl; 
     BenchmarkResult result;
     result.epsilon = Epsilon;
     result.time_ns = query_ns;
@@ -216,9 +217,9 @@ int main() {
 
     std::string dataset = "books";
     std::string filename = "books_20M_uint64_unique";
-    std::string query_filename = "books_20M_uint64_unique.10Mtable.bin";
-    std::string len_filename = "books_20M_uint64_unique.10Mtable.par";
-    std::string bitmap_filename = "books_20M_uint64_unique.10Mtable.bitmap";
+    std::string query_filename = "books_20M_uint64_unique.100Ktable2.bin";
+    std::string len_filename = "books_20M_uint64_unique.100Ktable2.par";
+    std::string bitmap_filename = "books_20M_uint64_unique.100Ktable2.bitmap";
     std::string file = DATASETS + filename;
     std::string query_file = DATASETS + query_filename;
     std::string bitmap_file = DATASETS + bitmap_filename;
@@ -228,7 +229,7 @@ int main() {
 
     int trials = 10;
     for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU}){     //pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU
-        std::ofstream ofs(mk_outfilename(s,dataset,20,MemoryBudget>>20,"-join"));
+        std::ofstream ofs(mk_outfilename(s,dataset,20,MemoryBudget>>20,"-join.5"));
         ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,avg_index_cache_hit_ratio,data_IOs,total_time\n";
         for (int i=0;i<trials;i++){
             BenchmarkResult result = benchmark<8, MemoryBudget>(data, query_file, bitmap_file, len_file, file, s);

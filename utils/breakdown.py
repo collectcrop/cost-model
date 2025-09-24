@@ -1,55 +1,61 @@
 import pandas as pd
 import numpy as np
 
-raw_text = """Index time:1170
-Cache time:911073
+raw_text = """
+Index time:1196
+Cache time:2012700
 Height: 4
-IO time: 900065
+IO time: 1886898
 
-Index time:1014
-Cache time:1047617
+Index time:1124
+Cache time:1171354
 Height: 4
-IO time: 1036484
+IO time: 1087567
 
-Index time:1435
-Cache time:766928
+Index time:1285
+Cache time:1103254
 Height: 4
-IO time: 752020
+IO time: 976470
 
-Index time:1761
-Cache time:23605758
+Index time:1022
+Cache time:23111522
 Height: 4
-IO time: 23569681
+IO time: 22987615
 
-Index time:1790
-Cache time:22962082
+Index time:2349
+Cache time:23950938
 Height: 4
-IO time: 22925381
+IO time: 23704946
 
-Index time:1583
-Cache time:923632
+Index time:1143
+Cache time:1569841
 Height: 4
-IO time: 905784
+IO time: 1483962
 
-Index time:1157
-Cache time:22875980
+Index time:1140
+Cache time:23673005
 Height: 4
-IO time: 22853506
+IO time: 23548751
 
-Index time:1340
-Cache time:1097144
+Index time:1172
+Cache time:23388117
 Height: 4
-IO time: 1085215
+IO time: 23209511
 
-Index time:1386
-Cache time:967993
+Index time:1220
+Cache time:1604480
 Height: 4
-IO time: 953888
+IO time: 1478618
 
-Index time:1386
-Cache time:967993
+Index time:1406
+Cache time:839332
 Height: 4
-IO time: 953888
+IO time: 640633
+
+Index time:1444
+Cache time:1031602
+Height: 4
+IO time: 918868
 """
 
 # Parse the blocks
@@ -62,7 +68,7 @@ for b in blocks:
     height = int(lines[2].split(":")[1])
     io = int(lines[3].split(":")[1])
     rows.append({"index_time": idx, "cache_time": cache, "height": height, "io_time": io})
-
+print(rows)
 df = pd.DataFrame(rows)
 df.index = range(1, len(df)+1)
 

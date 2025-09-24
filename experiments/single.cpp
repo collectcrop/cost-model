@@ -18,7 +18,7 @@
 #include <fstream>
 #include "distribution/zipf.hpp"
 #include "pgm/pgm_index_cost.hpp"
-
+#include "utils/include.hpp"
 using KeyType = uint64_t;
 #define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
 #define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
@@ -34,15 +34,12 @@ struct RangeQuery {
 
 using timer = std::chrono::high_resolution_clock;
 
-std::vector<KeyType> load_data(std::string filename){
+std::vector<KeyType> load_data(std::string filename, size_t total_keys){
     std::ifstream infile(filename, std::ios::binary);
     if (!infile) {
         std::cerr << "Failed to open input file: " << filename << "\n";
         return {};
     }
-    // Read total number of keys in the original file
-    uint64_t total_keys;
-    infile.read(reinterpret_cast<char*>(&total_keys), sizeof(uint64_t));
 
     std::vector<KeyType> keys(total_keys);
     infile.read(reinterpret_cast<char*>(keys.data()), total_keys * sizeof(Record));
@@ -84,7 +81,7 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 
     while (left < right) {
         size_t mid = left + (right - left) / 2;
-        const char* mid_ptr = buffer.data() + mid * RECORD_SIZE;
+        const char* mid_ptr = buffer.data() + mid * pgm::RECORD_SIZE;
         uint64_t mid_key = extract_key(mid_ptr);
 
         if (mid_key < target_key) {
@@ -96,7 +93,7 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 
     // 检查 left 是否就是目标
     if (left < hi) {
-        const char* candidate = buffer.data() + left * RECORD_SIZE;
+        const char* candidate = buffer.data() + left * pgm::RECORD_SIZE;
         uint64_t candidate_key = extract_key(candidate);
         if (candidate_key == target_key) {
             return candidate; // 找到
@@ -129,11 +126,11 @@ int main() {
     // std::string query_filename = "range_query_fb_uu.bin";
     std::string file = DATASETS + filename;
     // std::string query_file = DATASETS + query_filename;
-    std::vector<KeyType> data = load_data(file);
+    std::vector<KeyType> data = load_data(file,20000000);
     // std::vector<RangeQuery> queries = load_queries(query_file);
-    const size_t MemoryBudget = 80*1024*1024;
+    const size_t MemoryBudget = 20*1024*1024;
     size_t query = 112983;
-    pgm::PGMIndex<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::FIFO);
+    pgm::PGMIndex<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::LFU);
     // std::vector<KeyType> res = index.range_search(5237953133,5255844371);
     auto range = index.search(query,pgm::ALL_IN_ONCE);
     std::vector<pgm::Record> records = range.records;

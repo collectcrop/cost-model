@@ -17,25 +17,26 @@
 #include <list>
 #include <iostream>
 #include <chrono>
+#include <shared_mutex>
+#include <mutex>
 
 using timer = std::chrono::high_resolution_clock;
-#define PAGE_SIZE 4096
 #define MAX_FREQ 100000
 
-class LFUCache : public ICache<size_t, Page> {
+class LFUCache : public ICache<size_t, pgm::Page> {
     int min_freq;
 
     using LFUIter = std::list<size_t>::iterator;
 
     struct CacheEntry {
-        Page page;
+        pgm::Page page;
         size_t freq;
         LFUIter lfu_pos;
     };
 
     std::unordered_map<size_t, CacheEntry> cache;
     std::unordered_map<size_t, std::list<size_t>> freq_to_keys;
-
+    mutable std::shared_mutex mutex; 
     public:
 
     /**
@@ -44,7 +45,7 @@ class LFUCache : public ICache<size_t, Page> {
      * @param fd_ the file descriptor of the data file
      * @param n the number of elements in the index
      */
-    explicit LFUCache(size_t C_, int fd_) {
+    explicit LFUCache(size_t C_, int fd_, pgm::IOInterface interface=pgm::PSYNC) {
         this->fd = fd_;
         this->C = C_;
         this->cache_hits = 0;
@@ -52,6 +53,16 @@ class LFUCache : public ICache<size_t, Page> {
         this->IO_time = 0;
         this->IOs = 0;
         min_freq = 0;
+        switch (interface){
+            case pgm::PSYNC:
+                this->io = std::make_unique<SyncInterface>(fd);
+                break;
+            case pgm::LIBAIO:
+                // this->io = 
+                break;
+            case pgm::IO_URING:
+                break;
+        }
     }
 
     /**
@@ -59,27 +70,36 @@ class LFUCache : public ICache<size_t, Page> {
      * @param index the index of the page to retrieve
      * 
      */
-    Page& get (const size_t index) override{
-        auto it = cache.find(index);
-        if (it != cache.end()) {
-            // Cache hit
-            this->cache_hits++;
-            // adapt frequency
-            size_t freq = it->second.freq;
-            freq_to_keys[freq].erase(it->second.lfu_pos);
-            if (it->second.freq < MAX_FREQ) it->second.freq++;
-            freq_to_keys[freq+1].push_back(index);
-            it->second.lfu_pos = --freq_to_keys[freq+1].end();
+    pgm::Page& get (const size_t index) override{
+        {
+            std::shared_lock rlock(mutex);
+            auto it = cache.find(index);
+            if (it != cache.end()) {
+                // Cache hit
+                rlock.unlock();
+                std::unique_lock wlock(mutex);
+                this->cache_hits++;
+                // adapt frequency
+                size_t freq = it->second.freq;
+                freq_to_keys[freq].erase(it->second.lfu_pos);
+                if (it->second.freq < MAX_FREQ) it->second.freq++;
+                freq_to_keys[freq+1].push_back(index);
+                it->second.lfu_pos = --freq_to_keys[freq+1].end();
 
-            if (freq_to_keys[freq].empty()) {
-                freq_to_keys.erase(freq);
-                if (min_freq == freq) min_freq++;
+                if (freq_to_keys[freq].empty()) {
+                    freq_to_keys.erase(freq);
+                    if (min_freq == freq) min_freq++;
+                }
+                return it->second.page;
             }
-            return it->second.page;
         }
+
+        std::unique_lock wlock(mutex);
         this->cache_misses++;
         // Not found, load from disk
-        Page p = triggerIO(index);
+        std::pair<pgm::Page,pgm::IOResult> res = triggerIO(index);
+        auto p = res.first;
+        // auto p = triggerIO(index);
 
         if (cache.size() >= C) {
             // evict if full
@@ -96,7 +116,8 @@ class LFUCache : public ICache<size_t, Page> {
         cache[index] = CacheEntry{std::move(p), 1, --freq_to_keys[1].end()};
     
         min_freq = 1;
-        
+        IO_time += res.second.ns;
+        IOs++;
         return cache[index].page;    
     }
 
@@ -106,9 +127,11 @@ class LFUCache : public ICache<size_t, Page> {
      * @param hi is the index of the highest page to retrieve
      * 
      */
-    std::vector<Page> get(const size_t lo, const size_t hi) override {
-        std::vector<Page> res;
+    std::vector<pgm::Page> get(const size_t lo, const size_t hi) override {
+        std::vector<pgm::Page> res;
         size_t miss_begin = (size_t)-1;
+        std::unique_lock wlock(mutex);
+        std::pair<std::vector<pgm::Page>, pgm::IOResult> pair;
 
         for (size_t index = lo; index <= hi; index++) {
             auto it = cache.find(index);
@@ -116,7 +139,11 @@ class LFUCache : public ICache<size_t, Page> {
                 // --- flush previous miss ---
                 if (miss_begin != (size_t)-1) {
                     size_t miss_len = index - miss_begin;
-                    auto pages = triggerIO(miss_begin, miss_len);
+                    pair = triggerIO(miss_begin, miss_len);
+                    auto pages = pair.first;
+                    // auto pages = triggerIO(miss_begin, miss_len);
+                    IO_time += pair.second.ns;
+                    IOs += miss_len;
                     for (size_t i = 0; i < pages.size(); i++) {
                         size_t idx = miss_begin + i;
                         freq_to_keys[1].push_back(idx);
@@ -162,7 +189,11 @@ class LFUCache : public ICache<size_t, Page> {
         // --- flush tail miss ---
         if (miss_begin != (size_t)-1) {
             size_t miss_len = hi - miss_begin + 1;
-            auto pages = triggerIO(miss_begin, miss_len);
+            pair = triggerIO(miss_begin, miss_len);
+            auto pages = pair.first;
+            // auto pages = triggerIO(miss_begin, miss_len);
+            IO_time += pair.second.ns;
+            IOs += miss_len;
             for (size_t i = 0; i < pages.size(); i++) {
                 size_t idx = miss_begin + i;
                 freq_to_keys[1].push_back(idx);

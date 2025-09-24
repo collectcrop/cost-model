@@ -17,14 +17,16 @@
 #include <queue>
 #include <iostream>
 #include <chrono>
+#include <shared_mutex>
+#include <mutex>
+#include "IO/SyncInterface.hpp"
 
 using timer = std::chrono::high_resolution_clock;
-#define PAGE_SIZE 4096
 
-class FIFOCache : public ICache<size_t, Page> {
-    std::unordered_map<size_t,Page> cache;  
+class FIFOCache : public ICache<size_t, pgm::Page> {
+    std::unordered_map<size_t,pgm::Page> cache;  
     std::queue<size_t> q;
-
+    mutable std::shared_mutex mutex; 
     public:
 
     /**
@@ -33,13 +35,23 @@ class FIFOCache : public ICache<size_t, Page> {
      * @param fd_ the file descriptor of the data file
      * @param n the number of elements in the index
      */
-    explicit FIFOCache(size_t C_, int fd_) {
+    explicit FIFOCache(size_t C_, int fd_, pgm::IOInterface interface=pgm::PSYNC) {
         this->fd = fd_;
         this->C = C_;
         this->cache_hits = 0;
         this->cache_misses = 0;
         this->IO_time = 0;
         this->IOs = 0;
+        switch (interface){
+            case pgm::PSYNC:
+                this->io = std::make_unique<SyncInterface>(fd);
+                break;
+            case pgm::LIBAIO:
+                // this->io = 
+                break;
+            case pgm::IO_URING:
+                break;
+        }
     }
 
     /**
@@ -47,13 +59,17 @@ class FIFOCache : public ICache<size_t, Page> {
      * @param index the index of the page to retrieve
      * 
      */
-    Page& get (const size_t index) override{
-        auto it = cache.find(index);
-        if (it != cache.end()) {
-            // Cache hit
-            this->cache_hits++;
-            return it->second;
+    pgm::Page& get (const size_t index) override{
+        {   
+            std::shared_lock rlock(mutex);
+            auto it = cache.find(index);
+            if (it != cache.end()) {
+                // Cache hit
+                this->cache_hits++;
+                return it->second;
+            }
         }
+        std::unique_lock wlock(mutex);
         this->cache_misses++;
         // Evict if full
         if (cache.size() >= C) {
@@ -62,11 +78,14 @@ class FIFOCache : public ICache<size_t, Page> {
             cache.erase(old);
         }
         // Not found, load from disk
-        Page p = triggerIO(index);
-
+        std::pair<pgm::Page,pgm::IOResult> res = triggerIO(index);
+        pgm::Page p = res.first;
+        // Page p = triggerIO(index);
         // Insert new page
         q.push(index);
         cache[index] = std::move(p);
+        IO_time += res.second.ns;
+        IOs++;
         return cache[index];    
     }
 
@@ -76,16 +95,23 @@ class FIFOCache : public ICache<size_t, Page> {
      * @param hi is the index of the highest page to retrieve
      * 
      */
-    std::vector<Page> get (const size_t lo, const size_t hi) override{
-        std::vector<Page> res;
+    std::vector<pgm::Page> get (const size_t lo, const size_t hi) override{
+        std::vector<pgm::Page> res;
         size_t miss_begin = -1;
+        std::unique_lock wlock(mutex);
+        std::pair<std::vector<pgm::Page>, pgm::IOResult> pair;
+
         for (size_t index=lo;index<=hi;index++){
             auto it = cache.find(index);
             if (it != cache.end()) {
                 // trigger previous IO
                 if (miss_begin != (size_t)-1){
                     size_t miss_len = index - miss_begin;
-                    std::vector<Page> pages = triggerIO(index,miss_len);
+                    pair = triggerIO(miss_begin, miss_len);
+                    auto pages = pair.first;
+                    IO_time += pair.second.ns;
+                    IOs += miss_len;
+                    // auto pages = triggerIO(miss_begin, miss_len);
                     for (int i=0;i<pages.size();i++){
                         size_t idx = miss_begin + i;
                         // Insert new page
@@ -113,7 +139,11 @@ class FIFOCache : public ICache<size_t, Page> {
         // flush tail miss
         if (miss_begin != (size_t)-1) {
             size_t miss_len = hi - miss_begin + 1;
-            auto pages = triggerIO(miss_begin, miss_len);
+            pair = triggerIO(miss_begin, miss_len);
+            auto pages = pair.first;
+            IO_time += pair.second.ns;
+            IOs += miss_len;
+            // auto pages = triggerIO(miss_begin, miss_len);
             for (size_t i = 0; i < pages.size(); i++) {
                 size_t idx = miss_begin + i;
                 
@@ -133,6 +163,7 @@ class FIFOCache : public ICache<size_t, Page> {
     }
 
     void clear() override {
+        std::unique_lock wlock(mutex);
         cache.clear();
         std::queue<size_t> empty;
         std::swap(q, empty);

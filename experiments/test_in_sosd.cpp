@@ -22,111 +22,29 @@
 #include <fstream>
 #include "distribution/zipf.hpp"
 #include "pgm/pgm_index_cost.hpp"
+#include "utils/utils.hpp"
 
 using KeyType = uint64_t;
 #define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
 #define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
 
-struct Record {
-    uint64_t key;
-};
+// struct Record {
+//     uint64_t key;
+// };
 
 struct BenchmarkResult {
     size_t epsilon;
     double time_ns;
     double hit_ratio;
-    double index_hit_ratio;
     time_t total_time;
     time_t data_IO_time;
-    time_t index_IO_time;
     size_t height;
     size_t data_IOs;
 };
 
 using timer = std::chrono::high_resolution_clock;
 
-std::vector<KeyType> load_data(std::string filename, size_t total_keys){
-    std::ifstream infile(filename, std::ios::binary);
-    if (!infile) {
-        std::cerr << "Failed to open input file: " << filename << "\n";
-        return {};
-    }
-    // Read total number of keys in the original file
-    // uint64_t total_keys;
-    // infile.read(reinterpret_cast<char*>(&total_keys), sizeof(uint64_t));
 
-    std::vector<KeyType> keys(total_keys);
-    infile.read(reinterpret_cast<char*>(keys.data()), total_keys * sizeof(KeyType));
-
-    if (!infile) {
-        std::cerr << "Error while reading input file data.\n";
-    }
-
-    return keys;
-}
-
-std::vector<KeyType> load_queries(const std::string& filename) {
-    std::ifstream infile(filename, std::ios::binary);
-    infile.seekg(0, std::ios::end);
-    size_t filesize = infile.tellg();
-    infile.seekg(0);
-    size_t num_queries = filesize / sizeof(KeyType);
-    std::vector<KeyType> queries(num_queries);
-    infile.read(reinterpret_cast<char*>(queries.data()), filesize);
-    return queries;
-}
-
-uint64_t extract_key(const char* record) {
-    // 假设 key 是前 8 个字节（little-endian）
-    uint64_t key;
-    std::memcpy(&key, record, sizeof(uint64_t));
-    return key;
-}
-
-const char* binary_search_record(const std::vector<char>& buffer, size_t lo, size_t hi, uint64_t target_key) {
-    size_t left = lo;
-    size_t right = hi;
-
-    while (left < right) {
-        size_t mid = left + (right - left) / 2;
-        const char* mid_ptr = buffer.data() + mid * RECORD_SIZE;
-        uint64_t mid_key = extract_key(mid_ptr);
-
-        if (mid_key < target_key) {
-            left = mid + 1;
-        } else {
-            right = mid;
-        }
-    }
-
-    // 检查 left 是否就是目标
-    if (left < hi) {
-        const char* candidate = buffer.data() + left * RECORD_SIZE;
-        uint64_t candidate_key = extract_key(candidate);
-        if (candidate_key == target_key) {
-            return candidate; // 找到
-        }
-    }
-
-    return nullptr; // 没找到
-}
-
-const bool binary_search_record(std::vector<pgm::Record> records, size_t lo, size_t hi, KeyType target_key){
-    int64_t left = lo;
-    int64_t right = hi;
-    while (left <= right) {
-        int64_t mid = (right + left) / 2;
-        KeyType key = records[mid].key;
-        if (key < target_key) {
-            left = mid + 1;
-        } else if(key > target_key){
-            right = mid - 1;
-        } else {
-            return true;
-        }
-    }
-    return false;
-}
 
 template <size_t Epsilon, size_t M>
 BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries,std::string filename, pgm::CacheStrategy s) {
@@ -138,7 +56,7 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries
         std::vector<pgm::Record> records = range.records;
         size_t lo = range.lo;
         size_t hi = range.hi;
-        const bool result = binary_search_record(records, lo, hi, q);
+        const bool result = binary_search_record(records.data(), lo, hi, q);
         // if (result) cnt++;
     }
     // std::cout << "total: " << cnt << std::endl;
@@ -147,21 +65,16 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries
     auto query_ns = t / queries.size();
     
     auto cache = index.get_data_cache();
-    auto index_cache = index.get_index_cache();
 
     size_t total_hits = cache->get_hit_count();
     size_t total_access = cache->get_hit_count() + cache->get_miss_count();
-    size_t index_total_hits = index_cache->get_hit_count();
-    size_t index_total_access = index_cache->get_hit_count() + index_cache->get_miss_count();
     std::cout << "C=" << cache->get_C() << std::endl; 
     BenchmarkResult result;
     result.epsilon = Epsilon;
     result.time_ns = query_ns;
     result.hit_ratio = static_cast<double>(total_hits) / total_access;
-    result.index_hit_ratio = static_cast<double>(index_total_hits) / index_total_access;
     result.total_time = t;
     result.data_IO_time = cache->get_IO_time();
-    result.index_IO_time = index_cache->get_IO_time();
     result.height = index.height();
     result.data_IOs = cache->get_IOs();
     return result;
@@ -195,7 +108,7 @@ int main() {
 
     std::string dataset = "books";
     std::string filename = "books_20M_uint64_unique";
-    std::string query_filename = "books_20M_uint64_unique.10Mtable.bin";
+    std::string query_filename = "books_20M_uint64_unique.100Ktable2.bin";
     std::string file = DATASETS + filename;
     std::string query_file = DATASETS + query_filename;
     std::vector<KeyType> data = load_data(file,20000000);
@@ -204,8 +117,8 @@ int main() {
     
     int trials = 10;
     for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU}){     //pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU
-        std::ofstream ofs(mk_outfilename(s,dataset,20,MemoryBudget>>20,""));
-        ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,avg_index_cache_hit_ratio,data_IOs,total_time\n";
+        std::ofstream ofs(mk_outfilename(s,dataset,20,MemoryBudget>>20,".5"));
+        ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,data_IOs,total_time\n";
         for (int i=0;i<trials;i++){
             for (size_t epsilon : {8}) {     //8,10,12,14,16,18,20,24,32,48,64,128,256
                 BenchmarkResult result;
@@ -246,14 +159,12 @@ int main() {
                 std::cout << "ε=" << result.epsilon
                         << ", time=" << result.time_ns << " ns"
                         << ", hit ratio=" << result.hit_ratio
-                        << ", index hit ratio=" << result.index_hit_ratio
-                        << ", total time=" << result.total_time << " ns"
+                        << ", total time=" << result.total_time / 1e9 << " s"
                         << ", data IO time=" << result.data_IO_time << " ns"
-                        << ", index IO time=" << result.index_IO_time << " ns" 
                         << ", data IOs=" << result.data_IOs
                         << ", height=" << result.height << std::endl;
                 ofs << result.epsilon << "," << result.time_ns << "," << result.hit_ratio << "," 
-                << result.index_hit_ratio <<  "," << result.data_IOs <<  "," << result.total_time <<"\n";
+                << result.data_IOs <<  "," << result.total_time <<"\n";
             }
         }
         
