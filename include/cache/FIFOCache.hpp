@@ -20,6 +20,8 @@
 #include <shared_mutex>
 #include <mutex>
 #include "IO/SyncInterface.hpp"
+#include "IO/LibaioInterface.hpp"
+#include "IO/IOuringInterface.hpp"
 
 using timer = std::chrono::high_resolution_clock;
 
@@ -47,9 +49,10 @@ class FIFOCache : public ICache<size_t, pgm::Page> {
                 this->io = std::make_unique<SyncInterface>(fd);
                 break;
             case pgm::LIBAIO:
-                // this->io = 
+                this->io = std::make_unique<LibaioInterface>(fd);
                 break;
             case pgm::IO_URING:
+                this->io = std::make_unique<IoUringInterface>(fd);
                 break;
         }
     }

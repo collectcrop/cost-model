@@ -130,7 +130,7 @@ int main() {
     // std::vector<RangeQuery> queries = load_queries(query_file);
     const size_t MemoryBudget = 20*1024*1024;
     size_t query = 112983;
-    pgm::PGMIndex<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::LFU);
+    pgm::PGMIndexCost<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::LFU);
     // std::vector<KeyType> res = index.range_search(5237953133,5255844371);
     auto range = index.search(query,pgm::ALL_IN_ONCE);
     std::vector<pgm::Record> records = range.records;

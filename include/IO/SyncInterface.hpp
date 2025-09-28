@@ -100,8 +100,8 @@ public:
 
         res.ns = ns;
         res.bytes = br > 0 ? br : 0;
-        res.physical_ios = len;
-        res.logical_ios = 1;
+        res.physical_ios = 1;
+        res.logical_ios = len;
         return { std::move(pages), res };
     }
 };

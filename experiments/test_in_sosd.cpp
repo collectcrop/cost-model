@@ -48,7 +48,7 @@ using timer = std::chrono::high_resolution_clock;
 
 template <size_t Epsilon, size_t M>
 BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries,std::string filename, pgm::CacheStrategy s) {
-    pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s);
+    pgm::PGMIndexCost<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s);
     auto t0 = timer::now();
     int cnt = 0;
     for (auto &q : queries) {

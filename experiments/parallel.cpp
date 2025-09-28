@@ -77,7 +77,7 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
                              std::string filename,
                              pgm::CacheStrategy s,
                              int num_threads) {
-    pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data, filename, s);
+    pgm::PGMIndexCost<KeyType, Epsilon, M> index(data, filename, s, pgm::IOInterface::IO_URING, num_threads);
 
     std::atomic<long long> total_time_ns{0};
     global_queries_done = 0;
@@ -98,16 +98,13 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     auto wall_clock_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_all - start_all).count();
 
     auto cache = index.get_data_cache();
-    auto index_cache = index.get_index_cache();
 
     BenchmarkResult result;
     result.epsilon = Epsilon;
     result.time_ns = (double)wall_clock_ns / queries.size();  // 平均 query latency
     result.hit_ratio = (double)cache->get_hit_count() / (cache->get_hit_count() + cache->get_miss_count());
-    result.index_hit_ratio = (double)index_cache->get_hit_count() / (index_cache->get_hit_count() + index_cache->get_miss_count());
     result.total_time = wall_clock_ns;     // 墙钟时间
     result.data_IO_time = cache->get_IO_time();
-    result.index_IO_time = index_cache->get_IO_time();
     result.height = index.height();
     result.data_IOs = cache->get_IOs();
     return result;
@@ -134,7 +131,5 @@ int main() {
                 << ", total wall time=" << result.total_time / 1e9 << " s"
                 << ", data IOs=" << result.data_IOs << std::endl;
     }
-    
-
     return 0;
 }

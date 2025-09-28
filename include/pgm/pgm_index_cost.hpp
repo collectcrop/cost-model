@@ -48,7 +48,7 @@ namespace pgm {
 
 
 /**
- * A struct that stores the result of a query to a @ref PGMIndex, that is, a range [@ref lo, @ref hi)
+ * A struct that stores the result of a query to a @ref PGMIndexCost, that is, a range [@ref lo, @ref hi)
  * centered around an approximate position @ref pos of the sought key.
  */
 struct ApproxPos {
@@ -85,9 +85,9 @@ struct ApproxPosExt {
  * @tparam EpsilonRecursive controls the size of the search range in the internal structure
  * @tparam Floating the floating-point type to use for slopes
  */
-template<typename K, size_t Epsilon = 64, size_t MemoryBudget=1<<23, CacheType type = DATA,
+template<typename K, size_t Epsilon = 64, size_t MemoryBudget=1<<23,
     size_t EpsilonRecursive = 4, typename Floating = float>
-class PGMIndex {
+class PGMIndexCost {
 protected:
     template<typename, size_t, size_t, uint8_t, typename>
     friend class BucketingPGMIndex;
@@ -207,21 +207,21 @@ public:
     /**
      * Constructs an empty index.
      */
-    PGMIndex() = default;
+    PGMIndexCost() = default;
 
     /**
      * Constructs the index on the given sorted vector.
      * @param data the vector of keys to be indexed, must be sorted
      */
-    explicit PGMIndex(const std::vector<K> &data, std::string filename, CacheStrategy strategy=LRU, IOInterface interface=pgm::PSYNC) 
-    : PGMIndex(data.begin(), data.end(), filename, strategy, interface) {}
+    explicit PGMIndexCost(const std::vector<K> &data, std::string filename, CacheStrategy strategy=LRU, IOInterface interface=pgm::PSYNC, threads=1) 
+    : PGMIndexCost(data.begin(), data.end(), filename, strategy, interface, threads) {}
 
     /**
      * Constructs the index on the sorted keys in the range [first, last).
      * @param first, last the range containing the sorted keys to be indexed
      */
     template<typename RandomIt>
-    PGMIndex(RandomIt first, RandomIt last, std::string filename, CacheStrategy strategy=LRU, IOInterface interface=pgm::PSYNC)
+    PGMIndexCost(RandomIt first, RandomIt last, std::string filename, CacheStrategy strategy=LRU, IOInterface interface=pgm::PSYNC, threads=1)
         : n(std::distance(first, last)),
           first_key(n ? *first : K(0)),
           segments(),
@@ -244,7 +244,7 @@ public:
         }
     }
 
-    ~PGMIndex() {
+    ~PGMIndexCost() {
         if (data_fd >= 0) close(data_fd);
     }
 
@@ -478,9 +478,9 @@ public:
 
 #pragma pack(push, 1)
 
-template<typename K, size_t Epsilon, size_t MemoryBudget, CacheType type,
+template<typename K, size_t Epsilon, size_t MemoryBudget,
     size_t EpsilonRecursive, typename Floating>
-struct PGMIndex<K, Epsilon, MemoryBudget, type, EpsilonRecursive, Floating>::Segment {
+struct PGMIndexCost<K, Epsilon, MemoryBudget, EpsilonRecursive, Floating>::Segment {
     K key;              ///< The first key that the segment indexes.
     Floating slope;     ///< The slope of the segment.
     uint32_t intercept; ///< The intercept of the segment.

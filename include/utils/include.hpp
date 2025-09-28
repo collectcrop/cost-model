@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
-
+#include <memory>
 namespace pgm {
 typedef enum CacheType {
     SEGMENT,        // cache for segments

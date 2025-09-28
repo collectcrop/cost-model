@@ -16,14 +16,20 @@
 #pragma once
 
 #include "piecewise_linear_model.hpp"
+#include "utils/include.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <fcntl.h>
+#include <unistd.h>  
 #include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -42,6 +48,11 @@ struct ApproxPos {
     size_t hi;  ///< The upper bound of the range.
 };
 
+struct ApproxPosExt {
+    std::vector<Record> records;  // record buffer
+    size_t lo;      // minimal pos in buffer
+    size_t hi;      // maximal pos in buffer
+};
 /**
  * A space-efficient index that enables fast search operations on a sorted sequence of numbers.
  *
@@ -64,7 +75,7 @@ struct ApproxPos {
  * @tparam Floating the floating-point type to use for slopes
  */
 template<typename K, size_t Epsilon = 64, size_t EpsilonRecursive = 4, typename Floating = float>
-class PGMIndex {
+class PGMIndexDisk {
 protected:
     template<typename, size_t, size_t, uint8_t, typename>
     friend class BucketingPGMIndex;
@@ -79,7 +90,8 @@ protected:
     K first_key;                        ///< The smallest element.
     std::vector<Segment> segments;      ///< The segments composing the index.
     std::vector<size_t> levels_offsets; ///< The starting position of each level in segments[], in reverse order.
-
+    int data_fd = -1;
+    int IOs = 0;
     /// Sentinel value to avoid bounds checking.
     static constexpr K sentinel = std::numeric_limits<K>::has_infinity ? std::numeric_limits<K>::infinity()
                                                                        : std::numeric_limits<K>::max();
@@ -124,6 +136,15 @@ protected:
             last_n = build_level(epsilon_recursive, in_fun_rec, out_fun, last_n);
             levels_offsets.push_back(segments.size());
         }
+
+        //  Write segments to file
+        if (std::ofstream ofs{SEGMENT_FILE, std::ios::binary | std::ios::trunc}) {
+            for (auto segment : segments) {
+                ofs.write(reinterpret_cast<const char*>(&segment), sizeof(segment));
+            }
+        } else {
+            throw std::runtime_error("Failed to write segment file.");
+        }
     }
 
     /**
@@ -163,24 +184,29 @@ public:
     /**
      * Constructs an empty index.
      */
-    PGMIndex() = default;
+    PGMIndexDisk() = default;
 
     /**
      * Constructs the index on the given sorted vector.
      * @param data the vector of keys to be indexed, must be sorted
      */
-    explicit PGMIndex(const std::vector<K> &data) : PGMIndex(data.begin(), data.end()) {}
+    explicit PGMIndexDisk(const std::vector<K> &data, std::string filename) 
+    : PGMIndexDisk(data.begin(), data.end(), filename) {}
 
     /**
      * Constructs the index on the sorted keys in the range [first, last).
      * @param first, last the range containing the sorted keys to be indexed
      */
     template<typename RandomIt>
-    PGMIndex(RandomIt first, RandomIt last)
+    PGMIndexDisk(RandomIt first, RandomIt last, std::string filename)
         : n(std::distance(first, last)),
           first_key(n ? *first : K(0)),
           segments(),
           levels_offsets() {
+        data_fd = open(filename.c_str(),O_RDONLY|O_DIRECT);      // test for real IO time
+        // data_fd = open(filename.c_str(),O_RDONLY);                  // test for IOs
+        if (data_fd < 0)
+            throw std::runtime_error("Cannot open data file");
         build(first, last, Epsilon, EpsilonRecursive, segments, levels_offsets);
     }
 
@@ -189,13 +215,78 @@ public:
      * @param key the value of the element to search for
      * @return a struct with the approximate position and bounds of the range
      */
-    ApproxPos search(const K &key) const {
+    ApproxPosExt search(const K &key, SearchStrategy s=ALL_IN_ONCE) {
         auto k = std::max(first_key, key);
+        size_t pos;
+        // auto t0 = timer::now();
+        
         auto it = segment_for_key(k);
-        auto pos = std::min<size_t>((*it)(k), std::next(it)->intercept);
+        pos = std::min<size_t>((*it)(k), std::next(it)->intercept);
+        
+        // auto t1 = timer::now();
+        // std::cout << "Index time:" << std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count() << std::endl;
         auto lo = PGM_SUB_EPS(pos, Epsilon);
         auto hi = PGM_ADD_EPS(pos, Epsilon, n);
-        return {pos, lo, hi};
+
+        // all-at-once
+        if (s == ALL_IN_ONCE) {
+            std::vector<Record> buffer;
+            
+            // std::vector<pgm::Page> pages = cache->get(lo / ITEM_PER_PAGE, hi / ITEM_PER_PAGE);
+            std::vector<pgm::Page> pages;
+            size_t offset = lo / ITEM_PER_PAGE;
+            size_t len = hi / ITEM_PER_PAGE - offset + 1;
+            void* raw = nullptr;
+            if (posix_memalign(&raw, pgm::PAGE_SIZE, pgm::PAGE_SIZE*len) != 0) {
+                throw std::runtime_error("posix_memalign failed");
+            }
+            std::shared_ptr<char[]> buf(reinterpret_cast<char*>(raw), [](char* p){ free(p); });
+            ssize_t br = pread(data_fd, buf.get(), pgm::PAGE_SIZE*len, offset*pgm::PAGE_SIZE);
+            if (br < 0){
+                throw std::runtime_error(std::string("pread failed: ") + std::strerror(errno));
+            }
+            size_t pages_read = (br + pgm::PAGE_SIZE - 1) / pgm::PAGE_SIZE;
+            IOs += pages_read;
+            for (size_t i = 0; i < pages_read; i++) {
+                pgm::Page page;
+                void* page_ptr = nullptr;
+                if (posix_memalign(&page_ptr, pgm::PAGE_SIZE, pgm::PAGE_SIZE) != 0) {
+                    throw std::runtime_error("posix_memalign failed for sub-page");
+                }
+                page.data.reset(reinterpret_cast<char*>(page_ptr), [](char* p){ free(p); });
+
+                size_t copy_size = std::min(static_cast<size_t>(br - i * pgm::PAGE_SIZE), (size_t)pgm::PAGE_SIZE);
+                memcpy(page.data.get(), buf.get() + i * pgm::PAGE_SIZE, copy_size);
+
+                page.valid_len = copy_size;
+                pages.push_back(std::move(page));
+            }
+
+            for (auto &page : pages) {
+                size_t num_records = page.valid_len / sizeof(Record);   // valid record num
+                Record* records = reinterpret_cast<Record*>(page.data.get());
+                buffer.insert(buffer.end(), records, records + num_records);
+            }
+
+            size_t page_lo = lo / ITEM_PER_PAGE;
+            size_t rel_lo = lo % ITEM_PER_PAGE;
+            size_t rel_hi = std::min(hi - page_lo * ITEM_PER_PAGE, buffer.size());
+            
+            return {std::move(buffer), rel_lo, rel_hi};
+        }
+        // else{       // one-by-one
+        //     pgm::Page page;
+        //     Record* records = nullptr;
+        //     for (size_t pageIndex=lo/ITEM_PER_PAGE;pageIndex<=hi/ITEM_PER_PAGE;pageIndex++){
+        //         page = cache->get(pageIndex);
+        //         records = reinterpret_cast<Record*>(page.data.get());
+        //         if (records[page.valid_len/sizeof(Record) - 1].key>=key)    break;
+        //     }
+        //     size_t num_records = page.valid_len / sizeof(Record);
+        //     std::vector<Record> buffer(records, records + num_records);
+        //     size_t size = buffer.size(); 
+        //     return {std::move(buffer), 0, size};
+        // }
     }
 
     /**
@@ -215,12 +306,13 @@ public:
      * @return the size of the index in bytes
      */
     size_t size_in_bytes() const { return segments.size() * sizeof(Segment) + levels_offsets.size() * sizeof(size_t); }
+    size_t get_IOs() const { return IOs; }
 };
 
 #pragma pack(push, 1)
 
 template<typename K, size_t Epsilon, size_t EpsilonRecursive, typename Floating>
-struct PGMIndex<K, Epsilon, EpsilonRecursive, Floating>::Segment {
+struct PGMIndexDisk<K, Epsilon, EpsilonRecursive, Floating>::Segment {
     K key;              ///< The first key that the segment indexes.
     Floating slope;     ///< The slope of the segment.
     uint32_t intercept; ///< The intercept of the segment.
@@ -264,3 +356,4 @@ struct PGMIndex<K, Epsilon, EpsilonRecursive, Floating>::Segment {
 #pragma pack(pop)
 
 }
+

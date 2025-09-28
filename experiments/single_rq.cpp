@@ -146,7 +146,7 @@ const bool binary_search_record(pgm::Record* records, size_t lo, size_t hi, KeyT
 template <size_t Epsilon, size_t M>
 BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<RangeQuery> queries,std::string filename,
     pgm::CacheStrategy s, std::vector<KeyType> raw_queries={}) {
-    pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s);
+    pgm::PGMIndexCost<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s,pgm::IOInterface::LIBAIO);
     auto t0 = timer::now();
     int cnt = 0;
     std::vector<KeyType> range;
