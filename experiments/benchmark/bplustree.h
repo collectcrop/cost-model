@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <pthread.h>
+#include <stdint.h>
 
 #ifndef _BPLUS_TREE_H
 #define _BPLUS_TREE_H
@@ -35,7 +36,7 @@
         for (pos = (head)->next, n = pos->next; pos != (head); \
                 pos = n, n = pos->next)
 
-typedef int key_t;
+typedef uint64_t btree_key_t;
 
 struct list_head {
         struct list_head *prev, *next;
@@ -137,9 +138,9 @@ struct bplus_tree {
 };
 
 void bplus_tree_dump(struct bplus_tree *tree);
-long bplus_tree_get(struct bplus_tree *tree, key_t key);
-int bplus_tree_put(struct bplus_tree *tree, key_t key, long data);
-long bplus_tree_get_range(struct bplus_tree *tree, key_t key1, key_t key2);
+btree_key_t bplus_tree_get(struct bplus_tree *tree, btree_key_t key);
+int bplus_tree_put(struct bplus_tree *tree, btree_key_t key, btree_key_t data);
+long bplus_tree_get_range(struct bplus_tree *tree, btree_key_t key1, btree_key_t key2);
 struct bplus_tree *bplus_tree_init(char *filename, int block_size);
 void bplus_tree_deinit(struct bplus_tree *tree);
 int bplus_open(char *filename);

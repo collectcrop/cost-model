@@ -21,8 +21,9 @@
 #include <chrono>
 #include <fstream>
 #include "distribution/zipf.hpp"
-#include "pgm/pgm_index_cost.hpp"
+#include "pgm/pgm_index.hpp"
 #include "utils/utils.hpp"
+#include "FALCON/Falcon.hpp"
 
 using KeyType = uint64_t;
 #define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
@@ -47,38 +48,73 @@ using timer = std::chrono::high_resolution_clock;
 
 
 template <size_t Epsilon, size_t M>
-BenchmarkResult benchmark(std::vector<KeyType> data,std::vector<KeyType> queries,std::string filename, pgm::CacheStrategy s) {
-    pgm::PGMIndexCost<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s);
-    auto t0 = timer::now();
-    int cnt = 0;
-    for (auto &q : queries) {
-        auto range = index.search(q, pgm::ALL_IN_ONCE);
-        std::vector<pgm::Record> records = range.records;
-        size_t lo = range.lo;
-        size_t hi = range.hi;
-        const bool result = binary_search_record(records.data(), lo, hi, q);
-        // if (result) cnt++;
-    }
-    // std::cout << "total: " << cnt << std::endl;
-    auto t1 = timer::now();
-    auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-    auto query_ns = t / queries.size();
-    
-    auto cache = index.get_data_cache();
+BenchmarkResult benchmark(std::vector<KeyType> data,
+                          std::vector<KeyType> queries,
+                          std::string filename,
+                          pgm::CacheStrategy s) {
+    // 1) 建索引（只做“定位窗口”，不触发 I/O）
+    pgm::PGMIndex<KeyType, Epsilon> index(data);
 
-    size_t total_hits = cache->get_hit_count();
-    size_t total_access = cache->get_hit_count() + cache->get_miss_count();
-    std::cout << "C=" << cache->get_C() << std::endl; 
+    // 2) 打开数据文件（O_DIRECT）
+    int data_fd = open(filename.c_str(), O_RDONLY | O_DIRECT);
+    if (data_fd < 0) { perror("open"); std::exit(1); }
+
+    // 3) Cache 策略映射到 FALCON 的策略
+    pgm::CachePolicy policy = pgm::CachePolicy::LRU;
+    switch (s) {
+        case pgm::CacheStrategy::LRU: policy = pgm::CachePolicy::LRU; break;
+        case pgm::CacheStrategy::FIFO: policy = pgm::CachePolicy::FIFO; break;
+        case pgm::CacheStrategy::LFU: policy = pgm::CachePolicy::LFU; break;
+    }
+
+    // 4) FALCON：一个 worker，一个 ring；用你的预算 M 初始化缓存
+    falcon::FalconPGM<uint64_t, Epsilon, 4> F(
+        index,
+        data_fd,
+        pgm::IO_URING,
+        /*memory_budget_bytes=*/ M,
+        /*cache_policy=*/ policy,
+        /*cache_shards=*/ 0,          // 2^0
+        /*max_pages_per_batch=*/ 128,
+        /*max_wait_us=*/ 50,
+        /*workers=*/ 1
+    );
+
+    // 5) 提交全部查询（让 FALCON 在 worker 侧聚合/去重/批量 I/O）
+    std::vector<std::future<falcon::PointResult>> futs;
+    futs.reserve(queries.size());
+
+    auto t0 = timer::now();
+    for (auto &q : queries) {
+        futs.emplace_back(F.point_lookup(q));
+    }
+    size_t found = 0;
+    for (auto &f : futs) {
+        auto r = f.get();
+        if (r.found) ++found; // 仅示意：你也可以校验正确性
+    }
+    auto t1 = timer::now();
+
+    // 6) 统计
+    auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    double query_ns = double(t) / queries.size();
+
+    auto st = F.stats(); // 从 FALCON 聚合得到命中与 I/O 指标
+
     BenchmarkResult result;
-    result.epsilon = Epsilon;
-    result.time_ns = query_ns;
-    result.hit_ratio = static_cast<double>(total_hits) / total_access;
-    result.total_time = t;
-    result.data_IO_time = cache->get_IO_time();
-    result.height = index.height();
-    result.data_IOs = cache->get_IOs();
+    result.epsilon    = Epsilon;
+    result.time_ns    = query_ns;
+    result.hit_ratio  = (st.cache_hits + st.cache_misses)
+                        ? double(st.cache_hits) / double(st.cache_hits + st.cache_misses)
+                        : 0.0;
+    result.total_time = t;                // ns
+    result.data_IO_time = st.io_ns;       // ns（批量 I/O 时间累计）
+    result.height     = index.height();
+    result.data_IOs   = st.physical_ios;  // 物理读取次数（聚合后）
+    close(data_fd);
     return result;
 }
+
 
 std::string mk_outfilename(pgm::CacheStrategy s,std::string dataset,size_t ds, size_t ms, std::string suffix=""){
     std::string prefix;
@@ -107,16 +143,16 @@ int main() {
     // }
 
     std::string dataset = "books";
-    std::string filename = "books_20M_uint64_unique";
-    std::string query_filename = "books_20M_uint64_unique.100Ktable2.bin";
+    std::string filename = "books_10M_uint64_unique";
+    std::string query_filename = "books_10M_uint64_unique.query.bin";
     std::string file = DATASETS + filename;
     std::string query_file = DATASETS + query_filename;
-    std::vector<KeyType> data = load_data(file,20000000);
+    std::vector<KeyType> data = load_data(file,10000000);
     std::vector<KeyType> queries = load_queries(query_file);
     const size_t MemoryBudget = 20*1024*1024;
     
     int trials = 10;
-    for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU}){     //pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU
+    for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU}){     //pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU
         std::ofstream ofs(mk_outfilename(s,dataset,20,MemoryBudget>>20,".5"));
         ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,data_IOs,total_time\n";
         for (int i=0;i<trials;i++){

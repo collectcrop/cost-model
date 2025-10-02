@@ -165,6 +165,135 @@ public:
         return { std::move(pages), res };
     }
 
+    std::pair<std::vector<pgm::Page>, pgm::IOResult>
+    triggerIO_batch(const std::vector<size_t>& indices) override {
+        pgm::IOResult stats{};
+        std::vector<pgm::Page> out;
+        out.resize(indices.size());
+        if (indices.empty()) return { std::move(out), stats };
+
+        // 1) 复制+排序（保留原位次，用于回填）
+        struct Req { size_t page; size_t pos; };
+        std::vector<Req> reqs;
+        reqs.reserve(indices.size());
+        for (size_t i = 0; i < indices.size(); ++i) {
+            reqs.push_back({ indices[i], i });
+        }
+        std::sort(reqs.begin(), reqs.end(), [](auto& a, auto& b){ return a.page < b.page; });
+
+        // 2) 去重 + 相邻合并
+        struct Range { size_t start; size_t len; std::vector<size_t> positions; };
+        std::vector<Range> ranges;
+        ranges.reserve(reqs.size());
+        for (auto &r : reqs) {
+            if (ranges.empty()) {
+                ranges.push_back(Range{ r.page, 1, { r.pos } });
+            } else {
+                auto &last = ranges.back();
+                size_t expect = last.start + last.len;
+                if (r.page == expect) {               // 相邻页 → 合并
+                    last.len++;
+                    last.positions.push_back(r.pos);
+                } else if (r.page < expect) {         // 重复页
+                    last.positions.push_back(r.pos);
+                } else {                               // 断裂 → 新片段
+                    ranges.push_back(Range{ r.page, 1, { r.pos } });
+                }
+            }
+        }
+
+        // 3) 为每个片段分配聚合缓冲区并提交 SQE
+        struct Pending {
+            Range* range;
+            std::shared_ptr<char> buf;
+            size_t bytes;
+        };
+        std::vector<Pending> pendings;
+        pendings.reserve(ranges.size());
+
+        auto t0 = timer::now();
+
+        for (auto &rg : ranges) {
+            size_t bytes = rg.len * pgm::PAGE_SIZE;
+
+            void* raw = nullptr;
+            if (posix_memalign(&raw, pgm::PAGE_SIZE, bytes) != 0)
+                throw std::runtime_error("posix_memalign failed");
+
+            std::shared_ptr<char> agg(reinterpret_cast<char*>(raw), [](char* p){ free(p); });
+
+            auto* sqe = io_uring_get_sqe(&ring);
+            if (!sqe) {
+                int sret = io_uring_submit(&ring); // flush
+                if (sret < 0) throw std::runtime_error(std::string("io_uring_submit: ") + std::strerror(-sret));
+                sqe = io_uring_get_sqe(&ring);
+                if (!sqe) throw std::runtime_error("io_uring_get_sqe null");
+            }
+            off_t off = static_cast<off_t>(rg.start) * static_cast<off_t>(pgm::PAGE_SIZE);
+            io_uring_prep_read(sqe, fd, agg.get(), bytes, off);
+            io_uring_sqe_set_data(sqe, &rg);
+
+            pendings.push_back(Pending{ &rg, agg, bytes });
+        }
+
+        int submit_ret = io_uring_submit(&ring);
+        if (submit_ret < 0) throw std::runtime_error(std::string("io_uring_submit: ") + std::strerror(-submit_ret));
+
+        // 4) 等待所有片段完成并分发到 out（按调用顺序回填）
+        size_t completed = 0;
+        while (completed < pendings.size()) {
+            io_uring_cqe* cqe = nullptr;
+            int ret = io_uring_wait_cqe(&ring, &cqe);
+            if (ret < 0) throw std::runtime_error(std::string("io_uring_wait_cqe: ") + std::strerror(-ret));
+
+            auto* rg = reinterpret_cast<Range*>(io_uring_cqe_get_data(cqe));
+            long br = cqe->res; // 读到的字节数或负 errno
+            io_uring_cqe_seen(&ring, cqe);
+            completed++;
+
+            if (br < 0) {
+                // 读失败：按请求位置填空页
+                for (auto pos : rg->positions) out[pos] = pgm::Page{};
+                continue;
+            }
+
+            // 找到对应 pending 以获取聚合缓冲
+            auto it = std::find_if(pendings.begin(), pendings.end(), [&](const Pending& p){ return p.range == rg; });
+            if (it == pendings.end()) continue;
+
+            stats.bytes += br;
+            stats.physical_ios += 1;
+
+            size_t got_pages = (br + pgm::PAGE_SIZE - 1) / pgm::PAGE_SIZE;
+            got_pages = std::min(got_pages, rg->len);
+
+            // 对该片段内所有被请求的原始位次，切页复制回 out[pos]
+            for (auto pos : rg->positions) {
+                size_t page_idx = indices[pos];         // 原始页号
+                size_t rel      = page_idx - rg->start; // 片段内相对偏移
+                pgm::Page p;
+                if (rel < got_pages) {
+                    void* per = nullptr;
+                    if (posix_memalign(&per, pgm::PAGE_SIZE, pgm::PAGE_SIZE) != 0)
+                        throw std::runtime_error("posix_memalign sub failed");
+                    std::shared_ptr<char[]> buf(reinterpret_cast<char*>(per), [](char* q){ free(q); });
+                    size_t copy = std::min(static_cast<size_t>(br - rel*pgm::PAGE_SIZE), (size_t)pgm::PAGE_SIZE);
+                    if ((long)copy > 0) {
+                        std::memcpy(buf.get(), it->buf.get() + rel*pgm::PAGE_SIZE, copy);
+                        p.data = std::move(buf);
+                        p.valid_len = copy;
+                    }
+                }
+                out[pos] = std::move(p);
+            }
+        }
+
+        auto t1 = timer::now();
+        stats.ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+        stats.logical_ios = indices.size();
+
+        return { std::move(out), stats };
+    }
 private:
     struct io_uring ring;
 };

@@ -8,7 +8,7 @@
 #include <math.h>
 
 #define MAX_THREADS (1 << 14)
-#define RUNS 5
+#define RUNS 3
 
 struct thread_args {
     struct bplus_tree* tree;
@@ -23,7 +23,7 @@ void* query_worker(void* arg) {
     uint64_t found = 0;
 
     for (uint64_t i = args->start; i < args->end; i++) {
-        long result = bplus_tree_get(args->tree, (key_t)args->queries[i]);
+        long result = bplus_tree_get(args->tree, (btree_key_t)args->queries[i]);
         if (result != -1) {
             found++;
         }
@@ -35,25 +35,27 @@ void* query_worker(void* arg) {
 int run_queries_multithread(char* index_path, uint64_t* queries, uint64_t total_queries, int threads, double* out_latency_ns, double* out_time_s, double* out_iops) {
     pthread_t* tids = malloc(sizeof(pthread_t) * threads);
     struct thread_args* args = malloc(sizeof(struct thread_args) * threads);
-    struct bplus_tree** trees = malloc(sizeof(struct bplus_tree*) * threads);
+    // struct bplus_tree** trees = malloc(sizeof(struct bplus_tree*) * threads);
 
     uint64_t per_thread = total_queries / threads;
 
+    struct bplus_tree* tree = bplus_tree_init(index_path, 4096);
     // 初始化每线程 B+tree 实例
-    for (int i = 0; i < threads; i++) {
-        trees[i] = bplus_tree_init(index_path, 4096);
-        if (!trees[i]) {
-            fprintf(stderr, "Thread %d failed to init tree\n", i);
-            return -1;
-        }
-    }
+    // for (int i = 0; i < threads; i++) {
+    //     trees[i] = tree;
+    //     // printf("height %d \n", trees[i]->level);
+    //     if (!trees[i]) {
+    //         fprintf(stderr, "Thread %d failed to init tree\n", i);
+    //         return -1;
+    //     }
+    // }
 
     struct timespec ts1, ts2;
     clock_gettime(CLOCK_MONOTONIC, &ts1);
 
     // 启动线程
     for (int i = 0; i < threads; i++) {
-        args[i].tree = trees[i];
+        args[i].tree = tree;
         args[i].queries = queries;
         args[i].start = i * per_thread;
         args[i].end = (i == threads - 1) ? total_queries : (i + 1) * per_thread;
@@ -77,16 +79,15 @@ int run_queries_multithread(char* index_path, uint64_t* queries, uint64_t total_
     *out_iops = iops;
 
     // 清理
-    for (int i = 0; i < threads; i++) {
-        bplus_tree_deinit(trees[i]);
-    }
-    free(trees);
+    // for (int i = 0; i < threads; i++) {
+    //     bplus_tree_deinit(trees[i]);
+    // }
+    // free(trees);
     free(args);
     free(tids);
 
     return 0;
 }
-
 
 void build_tree(char* index_path, char* data_path) {
     struct bplus_tree* tree = bplus_tree_init(index_path, 4096);
@@ -126,7 +127,7 @@ void build_tree(char* index_path, char* data_path) {
 
     // 插入所有键值对，值设为 key + 1
     for (uint64_t i = 0; i < total_keys; i++) {
-        if (bplus_tree_put(tree, (key_t)keys[i], (long)(keys[i] + 1)) != 0) {
+        if (bplus_tree_put(tree, (btree_key_t)keys[i], (btree_key_t)(keys[i] + 1)) != 0) {
             fprintf(stderr, "Failed to insert key %lu\n", keys[i]);
         }
     }
@@ -140,8 +141,9 @@ void build_tree(char* index_path, char* data_path) {
 
 int main(int argc, char* argv[]) {
     char* query_path   = "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique.query.bin";
+    char* data_path = "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique";
     char* index_path   = "./index";
-
+    build_tree(index_path, data_path);
     // 读取 query
     FILE* query_file = fopen(query_path, "rb");
     if (!query_file) {
