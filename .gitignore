@@ -1,1 +1,8 @@
 experiments/io_bench/testfile
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg
+*.webp
