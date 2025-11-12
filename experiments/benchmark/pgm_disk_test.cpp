@@ -132,8 +132,8 @@ BenchmarkResult run_experiment(std::vector<KeyType>& queries,
 }
 
 int main() {
-    std::string filename = "osm_cellids_10M_uint64_unique";
-    std::string query_filename = "osm_cellids_10M_uint64_unique.query.bin";
+    std::string filename = "wiki_ts_10M_uint64_unique";
+    std::string query_filename = "wiki_ts_10M_uint64_unique.query.bin";
     std::string file = DATASETS + filename;
     std::string query_file = DATASETS + query_filename;
 

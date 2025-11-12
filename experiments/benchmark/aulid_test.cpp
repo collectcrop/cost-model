@@ -150,8 +150,8 @@ static RunStats run_once(
 }
 
 int main(int argc, char** argv) {
-    std::string query_filename = "osm_cellids_10M_uint64_unique.query.bin";
-    char* file = "/mnt/home/zwshi/Datasets/SOSD/osm_cellids_10M_uint64_unique";
+    std::string query_filename = "wiki_ts_10M_uint64_unique.query.bin";
+    char* file = "/mnt/home/zwshi/Datasets/SOSD/wiki_ts_10M_uint64_unique";
     std::string query_file = DATASETS + query_filename;
     // if (argc < 6) {
     //     std::cerr << "Usage: " << argv[0] << " <index_name> <query_file> <has_size(0|1)> <max_exp> <repeats>\n";
