@@ -6,3 +6,4 @@ experiments/io_bench/testfile
 *.gif
 *.svg
 *.webp
+./index
