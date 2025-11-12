@@ -1,3 +1,4 @@
+// test threads
 #include <sched.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -12,6 +13,7 @@
 #include <cassert>
 #include <chrono>
 #include <fstream>
+#include <filesystem>
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -20,6 +22,7 @@
 #include "pgm/pgm_index.hpp"
 #include "utils/include.hpp"
 #include "utils/utils.hpp"
+#include "utils/LatencyRecorder.hpp"
 #include "FALCON/Falcon.hpp"      // ← 新增：FALCON 入口
 #include "cache/CacheInterface.hpp"  // 如果你的 MakeShardedCache 在这里声明
 
@@ -37,6 +40,8 @@ struct BenchmarkResult {
     double hit_ratio;
     time_t total_time;
     time_t data_IO_time;
+    time_t index_time;
+    time_t cache_time;
     size_t height;
     size_t data_IOs;
 };
@@ -48,32 +53,52 @@ using timer = std::chrono::high_resolution_clock;
 std::atomic<size_t> global_queries_done{0};
 
 // 单线程执行函数
+// 单线程执行函数（每个 query 端到端延迟）
 template <size_t Epsilon, size_t M>
-void worker_thread(falcon::FalconPGM<uint64_t, Epsilon, 4>* F,      // ← 用 FALCON
+void worker_thread(falcon::FalconPGM<uint64_t, Epsilon, 4>* F,
                    const std::vector<KeyType>& queries,
                    size_t begin, size_t end,
-                   std::atomic<long long>& total_time_ns) {
-    constexpr size_t BATCH = 128;  
-    auto t0 = timer::now();
+                   std::atomic<long long>& total_time_ns,
+                   LatencyRecorder* latency) {
+    using clock_t = std::chrono::high_resolution_clock;
+    constexpr size_t BATCH = 128;
 
-    std::vector<std::future<falcon::PointResult>> futs;
-    futs.reserve(BATCH);
+    struct Pending {
+        size_t qid;
+        clock_t::time_point t0;
+        std::future<falcon::PointResult> fut;
+    };
+
+    auto thread_t0 = clock_t::now();
+
+    std::vector<Pending> inflight;
+    inflight.reserve(BATCH);
 
     size_t i = begin;
     while (i < end) {
-        futs.clear();
-        size_t j = std::min(end, i + BATCH);
+        inflight.clear();
+        const size_t j = std::min(end, i + BATCH);
+
+        // 提交阶段：为每个 query 记录开始时间 + qid
         for (; i < j; ++i) {
-            futs.emplace_back(F->point_lookup(queries[i]));
+            auto t0 = clock_t::now();                      // 记录每条 query 的“提交时刻”
+            auto fut = F->point_lookup(queries[i]);        // 生成 future（不会阻塞）
+            inflight.push_back(Pending{ i, t0, std::move(fut) });
         }
-        for (auto& f : futs) {
-            (void)f.get(); // 可选：统计 found 数；这里只计时
+
+        // 回收阶段：逐个 get，并写入该 query 的 latency
+        for (auto& p : inflight) {
+            (void)p.fut.get();                             // 等待该 query 完成（可在此取 found 等信息）
+            // auto t1 = clock_t::now();
+            // uint64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - p.t0).count();
+            // latency->set(p.qid, ns);                        // ← 关键：按全局下标写回该 query 的延迟
             global_queries_done.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
-    auto t1 = timer::now();
-    auto dt = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    auto thread_t1 = clock_t::now();
+    auto dt = std::chrono::duration_cast<std::chrono::nanoseconds>(thread_t1 - thread_t0).count();
+    latency->set(begin, dt); 
     total_time_ns.fetch_add(dt, std::memory_order_relaxed);
 }
 
@@ -83,7 +108,7 @@ template <size_t Epsilon, size_t M>
 BenchmarkResult benchmark_mt(std::vector<KeyType> data,
                              std::vector<KeyType> queries,
                              std::string filename,
-                             pgm::CacheStrategy s,
+                             pgm::CachePolicy s,
                              int num_threads) {
     // 1) 只构建 PGM（用于页窗口估计；不让它自己做 I/O/缓存）
     pgm::PGMIndex<KeyType, Epsilon> index(data);
@@ -93,11 +118,11 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     if (data_fd < 0) { perror("open data"); std::exit(1); }
 
     // 3) 策略映射
-    pgm::CachePolicy policy = pgm::CachePolicy::LRU;
+    pgm::CachePolicy policy = pgm::CachePolicy::NONE;
     switch (s) {
-        case pgm::CacheStrategy::LRU:  policy = pgm::CachePolicy::LRU;  break;
-        case pgm::CacheStrategy::FIFO: policy = pgm::CachePolicy::FIFO; break;
-        case pgm::CacheStrategy::LFU:  policy = pgm::CachePolicy::LFU;  break;
+        case pgm::CachePolicy::LRU:  policy = pgm::CachePolicy::LRU;  break;
+        case pgm::CachePolicy::FIFO: policy = pgm::CachePolicy::FIFO; break;
+        case pgm::CachePolicy::LFU:  policy = pgm::CachePolicy::LFU;  break;
     }
 
     // 4) 构建 FALCON 引擎
@@ -109,10 +134,10 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
         pgm::IO_URING,
         /*memory_budget_bytes=*/ M,
         /*cache_policy=*/ policy,
-        /*cache_shards=*/ 0,                
-        /*max_pages_per_batch=*/ 256,       // 你也可试 64/128/512
-        /*max_wait_us=*/ 50,                // 时间窗口；如果想确定性，可把 worker 里做“计数触发”
-        /*workers=*/ std::max(num_threads/4, 1)   
+        /*cache_shards=*/ 1,                
+        /*max_pages_per_batch=*/ 256,       
+        /*max_wait_us=*/ 50,                
+        /*workers=*/ std::min(std::max(num_threads/8, 1),16)   
     );
 
     // 5) 多线程提交查询（每线程用批量 futures）
@@ -123,16 +148,20 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     threads.reserve(num_threads);
     size_t per_thread = queries.size() / num_threads;
 
+    const size_t Q = queries.size();
+    LatencyRecorder* latency = new LatencyRecorder(Q);
     auto start_all = timer::now();
     for (int t = 0; t < num_threads; t++) {
         size_t begin = t * per_thread;
         size_t end   = (t == num_threads - 1) ? queries.size() : (t + 1) * per_thread;
-        threads.emplace_back(worker_thread<Epsilon, M>, &F, std::ref(queries), begin, end, std::ref(total_time_ns));
+        threads.emplace_back(worker_thread<Epsilon, M>, &F, std::ref(queries), begin, end, std::ref(total_time_ns),latency);
     }
     for (auto& th : threads) th.join();
     auto end_all = timer::now();
     auto wall_clock_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(end_all - start_all).count();
 
+    // latency->dump_csv("./per_query_latency_T" + std::to_string(num_threads) + ".csv",
+    //              queries /*, 可选: &thread_of_query, &found */);
     // 6) 从 FALCON 拉统计
     auto st = F.stats();
     double hit_ratio = 0.0;
@@ -141,38 +170,57 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
 
     BenchmarkResult result;
     result.epsilon       = Epsilon;
-    result.time_ns       = double(wall_clock_ns) / queries.size();  // 平均 query latency（墙钟）
+    result.time_ns       = latency->get_avg();  // 平均 query latency（墙钟）
     result.hit_ratio     = hit_ratio;
     result.total_time    = wall_clock_ns;    // ns
     result.data_IO_time  = st.io_ns;         // FALCON 收集的 I/O 时间累计（ns）
     result.height        = index.height();   // PGM 高度
     result.data_IOs      = st.physical_ios;  // 物理 I/O 片段数（合并后）
+    result.index_time    = st.index_ns;
+    result.cache_time    = st.cache_ns;
     ::close(data_fd);
     return result;
 }
 
 int main() {
-    std::string dataset = "books";
-    std::string filename = "books_10M_uint64_unique";
-    std::string query_filename = "books_10M_uint64_unique.query.bin";
+    std::string dataset = "osm_cellids";
+    std::string filename = "osm_cellids_10M_uint64_unique";
+    std::string query_filename = "osm_cellids_10M_uint64_unique.query.bin";
     std::string file = DATASETS + filename;         
     std::string query_file = DATASETS + query_filename;
 
     std::vector<KeyType> data    = load_data(file, 10000000);
     std::vector<KeyType> queries = load_queries(query_file);
 
-    // const size_t MemoryBudget = 20ull * 1024 * 1024;
-    const size_t MemoryBudget = 0;
+    size_t repeat = 5;
+    const size_t MemoryBudget = 40ull * 1024 * 1024;
+    // const size_t MemoryBudget = 0;
 
-    for (int e = 0; e <= 14; ++e) {
-        uint64_t threads = 1ULL << e;
-        auto result = benchmark_mt<8, MemoryBudget>(data, queries, file, pgm::CacheStrategy::LRU, threads);
-
-        std::cout << "[Threads=" << threads << "] ε=" << result.epsilon
-                  << ", avg query time=" << result.time_ns << " ns"
-                  << ", hit ratio=" << result.hit_ratio
-                  << ", total wall time=" << result.total_time / 1e9 << " s"
-                  << ", data IOs=" << result.data_IOs << std::endl;
+    std::ofstream csv("osm_falcon_test.csv", std::ios::out | std::ios::trunc);
+    if (!csv) {
+        std::cerr << "Failed to open CSV output\n";
+        return 1;
     }
+    csv << "threads,avg_latency_ns,avg_walltime_s,avg_IOs,data_IO_time\n";
+    csv << std::fixed << std::setprecision(6);
+    for (int r=0; r<repeat; ++r){
+        for (int e = 0; e <= 14; ++e) {
+            uint64_t threads = 1ULL << e;
+            auto result = benchmark_mt<16, MemoryBudget>(data, queries, file, pgm::CachePolicy::NONE, threads);
+
+            std::cout << "[Threads=" << threads << "] ε=" << result.epsilon
+                    << ", avg query time=" << result.time_ns << " ns"
+                    << ", hit ratio=" << result.hit_ratio
+                    << ", total wall time=" << result.total_time / 1e9 << " s"
+                    << ", data IOs=" << result.data_IOs 
+                    << ", data IO time=" << result.data_IO_time / 1e9 << " s" 
+                    << ", index time=" << result.index_time << " ns"
+                    << ", cache time=" << result.cache_time << " ns" << std::endl;
+            csv << threads << "," << result.time_ns << "," << result.total_time  << "," << result.data_IOs << ","
+            << result.data_IO_time << "\n";
+            csv.flush();
+        }
+    }
+    csv.close();
     return 0;
 }

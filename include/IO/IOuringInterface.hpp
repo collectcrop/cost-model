@@ -26,6 +26,11 @@ public:
         if (ret < 0) {
             throw std::runtime_error(std::string("io_uring_queue_init failed: ") + std::strerror(-ret));
         }
+        // io_uring_params p{};
+        // p.flags |= IORING_SETUP_SQPOLL;     // 开启内核SQ轮询
+        // p.sq_thread_idle = 2000;            // 可配：空闲自旋ms
+        // int ret = io_uring_queue_init_params(queue_depth, &ring, &p);
+if (ret < 0) { /* 回退或报错 */ }
     }
 
     virtual ~IoUringInterface() {
@@ -179,7 +184,7 @@ public:
         for (size_t i = 0; i < indices.size(); ++i) {
             reqs.push_back({ indices[i], i });
         }
-        std::sort(reqs.begin(), reqs.end(), [](auto& a, auto& b){ return a.page < b.page; });
+        // std::sort(reqs.begin(), reqs.end(), [](auto& a, auto& b){ return a.page < b.page; });
 
         // 2) 去重 + 相邻合并
         struct Range { size_t start; size_t len; std::vector<size_t> positions; };
@@ -223,11 +228,11 @@ public:
             std::shared_ptr<char> agg(reinterpret_cast<char*>(raw), [](char* p){ free(p); });
 
             auto* sqe = io_uring_get_sqe(&ring);
-            if (!sqe) {
+            while (!sqe) {
                 int sret = io_uring_submit(&ring); // flush
                 if (sret < 0) throw std::runtime_error(std::string("io_uring_submit: ") + std::strerror(-sret));
                 sqe = io_uring_get_sqe(&ring);
-                if (!sqe) throw std::runtime_error("io_uring_get_sqe null");
+                // if (!sqe) throw std::runtime_error("io_uring_get_sqe null");
             }
             off_t off = static_cast<off_t>(rg.start) * static_cast<off_t>(pgm::PAGE_SIZE);
             io_uring_prep_read(sqe, fd, agg.get(), bytes, off);

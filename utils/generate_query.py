@@ -80,54 +80,58 @@ def generate_range_queries(num_queries, key_space_size,
     queries = np.array(queries[:num_queries], dtype=np.uint64)
     return queries
 
-def generate_join_table_from_data(keys, num_queries=100000, seed=42, num_segments=5, active_segments=2):
+def generate_join_table_from_data(keys, num_queries=100000, seed=42,
+                                  num_segments=5, active_segments=2, skew=0.5):
     """
-    生成带空page gap的 join query:
-      - 将key space划分成num_segments段
-      - 只在active_segments个segment里生成query
-      - 其他segment完全空白，制造page gap
+    生成带空page gap的 join query（简版）：
+      - 将 key space 划分为 num_segments 段
+      - 仅在 active_segments 个段里生成 query
+      - 用一个超参数 skew 控制各活跃段的“密度差异”（配额不均匀程度）
+        * skew < 1: 更集中（某几个段非常密）
+        * skew = 1: 中等不均
+        * skew > 1: 更平均
     """
-
     np.random.seed(seed)
     random.seed(seed)
 
     n = len(keys)
     seg_size = n // num_segments
-
     queries = []
 
-    # 随机挑选几个segment作为"热点段"
+    # 选出若干活跃段
     active_idx = random.sample(range(num_segments), active_segments)
 
-    per_segment_queries = num_queries // active_segments
+    # 用 Dirichlet(skew) 得到活跃段权重，再用多项分布分配查询总量
+    w = np.random.dirichlet(alpha=[skew] * active_segments)
+    quotas = np.random.multinomial(num_queries, w)
 
-    for seg in active_idx:
+    for j, seg in enumerate(active_idx):
         start = seg * seg_size
         end = min((seg + 1) * seg_size, n)
-        segment_keys = keys[start:end]
+        segment_keys = np.asarray(keys[start:end])  # 确保是 ndarray
 
-        # 在segment内再制造热点 + 稀疏
+        this_q = int(quotas[j])
+        if this_q <= 0 or segment_keys.size == 0:
+            continue
+
+        # 段内仍保持“热点 + 均匀”两部分（可按需改比例）
         hotspot_ratio = 0.6
-        hotspot_queries = int(per_segment_queries * hotspot_ratio)
-        uniform_queries = per_segment_queries - hotspot_queries
+        hotspot_queries = int(this_q * hotspot_ratio)
+        uniform_queries = this_q - hotspot_queries
 
-        # hotspot: 取该segment内的小范围
+        # hotspot: 取 segment 内的小范围 + Zipf 采样
         hotspot_size = max(1, int(0.05 * len(segment_keys)))
-        base = random.randint(0, len(segment_keys) - hotspot_size)
+        base = random.randint(0, max(0, len(segment_keys) - hotspot_size))
         hot_indices = np.random.zipf(1.5, hotspot_queries)
-        hot_indices = np.clip(hot_indices, 0, hotspot_size - 1)
+        hot_indices = np.clip(hot_indices - 1, 0, hotspot_size - 1)  # zipf 从1起
         queries.extend(segment_keys[base + hot_indices])
 
-        # uniform: 均匀取整个segment
-        take = min(uniform_queries, len(segment_keys))
-        print('uniform:',take)
-        queries.extend(np.random.choice(segment_keys, size=take, replace=False))
+        # uniform: 段内均匀采样；为保证配额，使用 replace=True
+        if uniform_queries > 0:
+            queries.extend(np.random.choice(segment_keys, size=uniform_queries, replace=True))
 
-    # 转成 numpy array
-    queries = np.array(queries, dtype=np.uint64)
-
-    # 升序
-    join_keys = np.sort(queries)
+    # 返回升序
+    join_keys = np.sort(np.array(queries, dtype=np.uint64))
     return join_keys
 
 def join_partition(keys, queries, page_size=4096, key_size=8,
@@ -182,7 +186,7 @@ def join_partition(keys, queries, page_size=4096, key_size=8,
         print("N:",N,"K:",K)
         mu = N / K
         lengths.append(N)
-        tau = (ipp+delta+H/K)/(math.log(epsilon,2)+H+delta)
+        tau = (ipp+delta+H/K)/(math.log(2*epsilon,2)+H+delta)
         print("τ:",tau)
         print("μ:",mu)
         if mu >= tau:
@@ -191,6 +195,10 @@ def join_partition(keys, queries, page_size=4096, key_size=8,
             bitmap.append(0)  # point
     print("Total Pages (Ref):", totalPagesRef)
     print("Total Queries:", sum(lengths))
+    # show numbers of range and point
+    print("Range:", sum(bitmap))
+    print("Point:", sum(lengths) - sum(bitmap))
+    
     # save to file
     np.array(lengths, dtype=np.int64).tofile(lengths_file)
     np.array(bitmap, dtype=np.int8).tofile(bitmap_file)
@@ -222,7 +230,7 @@ def main():
     #                              max_length=5000000,
     #                              exp_scale=10
     #                              )
-    # queries.tofile(f"{DATASETS_DIRECTORY}range_query_fb_uu.bin")
+    # queries.tofile(f"{DATASETS_DIRECTORY}range_query_{int(num_queries/1e6)}M_uu.bin")
     # print(f"[+] save queries to {DATASETS_DIRECTORY}range_query.bin successfully!")
     
     """ join """
@@ -234,9 +242,9 @@ def main():
     #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
     #         keys = raw
     #         print(f"[*] Loaded {len(keys)} keys.")
-    #         queries = generate_join_table_from_data(keys,num_queries,num_segments=1,active_segments=1)
-    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable1.bin")
-    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable1.bin successfully!")
+    #         queries = generate_join_table_from_data(keys,num_queries,num_segments=20,active_segments=1,skew=1)
+    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin")
+    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin successfully!")
     
     # datasets = ["books"]
     # num_queries = 100000
@@ -255,9 +263,9 @@ def main():
     page_size = 4096
     H = 4
     delta = 400
-    epsilon = 8
-    queryfile = "books_20M_uint64_unique.100Ktable2.bin"
-    dataset = "books_20M_uint64_unique"
+    epsilon = 16
+    queryfile = "books_100M_uint64_unique.1Mtable4.bin"
+    dataset = "books_100M_uint64_unique"
     raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
     keys = raw
     queries = np.fromfile(f"{DATASETS_DIRECTORY}{queryfile}", dtype=np.uint64)

@@ -220,6 +220,8 @@ public:
      */
     std::pair<size_t, size_t> estimate_pages_for_range(const K& lo_key, const K& hi_key) const {
         auto [plo, _]  = estimate_pages_for_key(lo_key);
+        if (lo_key == hi_key)
+            return { plo, _ };
         auto [__, phi] = estimate_pages_for_key(hi_key);
         return { plo, phi };
     }

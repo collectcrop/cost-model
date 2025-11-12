@@ -1,162 +1,97 @@
-/*
- * This example shows how to index and query a vector of random integers with the PGM-index.
- * Compile with:
- *   g++ simple.cpp -std=c++17 -I../include -o simple
- * Run with:
- *   ./simple
- */
-
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <random>
-#include <unordered_map>
-#include <algorithm>
-#include <cstdint>
-#include <cassert>
-#include <chrono>
-#include <fstream>
-#include "distribution/zipf.hpp"
-#include "pgm/pgm_index_cost.hpp"
+#include <bits/stdc++.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include "utils/include.hpp"
-using KeyType = uint64_t;
-#define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
+#include "utils/utils.hpp"
+#include "pgm/pgm_index.hpp"      // 只做“估计窗口”，不触发 IO
+#include "FALCON/Falcon.hpp"           // 你的 FALCON 外层封装
 
-struct Record {
-    uint64_t key;
-};
-
-struct RangeQuery {
-    uint64_t lo;
-    uint64_t hi;
-};
-
+using Key = uint64_t;
 using timer = std::chrono::high_resolution_clock;
 
-std::vector<KeyType> load_data(std::string filename, size_t total_keys){
-    std::ifstream infile(filename, std::ios::binary);
-    if (!infile) {
-        std::cerr << "Failed to open input file: " << filename << "\n";
-        return {};
+int main(int argc, char** argv) {
+    // 路径可从命令行传入；否则用你的默认路径
+    std::string data_path  = (argc > 1) ? argv[1] : "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique";
+    std::string query_path = (argc > 2) ? argv[2] : "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique.query.bin";
+
+    // 1) 载入数据与查询
+    std::vector<Key> data   = load_data(data_path, 10'000'000);   // 10M
+    std::vector<Key> querys = load_queries(query_path);           // 采样自 data，理应全部可命中
+    if (data.empty() || querys.empty()) {
+        std::cerr << "Load data/queries failed. paths:\n  data=" << data_path
+                  << "\n  queries=" << query_path << std::endl;
+        return 1;
     }
 
-    std::vector<KeyType> keys(total_keys);
-    infile.read(reinterpret_cast<char*>(keys.data()), total_keys * sizeof(Record));
+    // 2) 构建 PGM（只用于页窗口估计）
+    constexpr size_t EPS = 8;
+    // Mem/EpsRec 这两个模板参数只影响 PGM 内部结构，不影响 FALCON 的缓存/I/O
+    using PGM = pgm::PGMIndex<Key, EPS>;
+    PGM index(data);
 
-    if (!infile) {
-        std::cerr << "Error while reading input file data.\n";
-    }
+    // 3) 打开数据文件（FALCON 读磁盘）
+    int fd = ::open(data_path.c_str(), O_RDONLY | O_DIRECT);
+    if (fd < 0) { perror("open data"); return 2; }
 
-    return keys;
-}
+    // 4) 构建 FALCON：1 worker + 1 shard（确定性），适当的批上限
+    constexpr size_t MemoryBudget = 10ull << 20;     // 256 MiB 缓存
+    falcon::FalconPGM<Key, EPS, 4> F(
+        index,
+        fd,
+        pgm::IO_URING,
+        /*memory_budget_bytes=*/ MemoryBudget,
+        /*cache_policy=*/ pgm::CachePolicy::NONE,
+        /*cache_shards=*/ 1,                // 为了结果稳定，先设 1
+        /*max_pages_per_batch=*/ 256,       // 片段合并上限
+        /*max_wait_us=*/ 1000000,         // 拉大时间窗，避免时间抖动影响（或改成你实现里的计数触发）
+        /*workers=*/ 1
+    );
 
+    // 5) 一次提交一批 futures，让批量 I/O 生效（固定批大小以求确定性）
+    const size_t BATCH = 1024;
+    size_t found = 0;
+    std::vector<Key> misses_sample; misses_sample.reserve(8);
 
-std::vector<RangeQuery> load_queries(const std::string& filename) {
-    std::vector<RangeQuery> queries;
-    std::ifstream fin(filename, std::ios::binary);
-    if (!fin) {
-        std::cerr << "Failed to open file " << filename << std::endl;
-        return queries;
-    }
-
-    RangeQuery rq;
-    while (fin.read(reinterpret_cast<char*>(&rq), sizeof(RangeQuery))) {
-        queries.push_back(rq);
-    }
-
-    return queries;
-}
-
-uint64_t extract_key(const char* record) {
-    // 假设 key 是前 8 个字节（little-endian）
-    uint64_t key;
-    std::memcpy(&key, record, sizeof(uint64_t));
-    return key;
-}
-
-const char* binary_search_record(const std::vector<char>& buffer, size_t lo, size_t hi, uint64_t target_key) {
-    size_t left = lo;
-    size_t right = hi;
-
-    while (left < right) {
-        size_t mid = left + (right - left) / 2;
-        const char* mid_ptr = buffer.data() + mid * pgm::RECORD_SIZE;
-        uint64_t mid_key = extract_key(mid_ptr);
-
-        if (mid_key < target_key) {
-            left = mid + 1;
-        } else {
-            right = mid;
+    auto t0 = timer::now();
+    std::vector<std::future<falcon::PointResult>> futs; futs.reserve(BATCH);
+    for (size_t i = 0; i < querys.size(); ) {
+        futs.clear();
+        size_t j = std::min(querys.size(), i + BATCH);
+        for (; i < j; ++i) futs.emplace_back(F.point_lookup(querys[i]));
+        for (auto& f : futs) {
+            auto r = f.get();
+            if (r.found) ++found;
+            else if (misses_sample.size() < 8) misses_sample.push_back(r.key);
         }
     }
+    auto t1 = timer::now();
 
-    // 检查 left 是否就是目标
-    if (left < hi) {
-        const char* candidate = buffer.data() + left * pgm::RECORD_SIZE;
-        uint64_t candidate_key = extract_key(candidate);
-        if (candidate_key == target_key) {
-            return candidate; // 找到
-        }
+    // 6) 统计与断言
+    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    auto st = F.stats();
+    double hit_ratio = 0.0;
+    auto hm = st.cache_hits + st.cache_misses;
+    if (hm) hit_ratio = double(st.cache_hits) / double(hm);
+
+    std::cout << "Queries: " << querys.size()
+              << ", Found: " << found
+              << ", Expect: " << querys.size()
+              << "\nAvg latency: " << (double)ns / querys.size() << " ns"
+              << "\nCache hit ratio: " << hit_ratio
+              << "\nPhysical IOs: " << st.physical_ios
+              << ", IO bytes: " << st.io_bytes
+              << ", IO time(ns): " << st.io_ns
+              << std::endl;
+
+    if (found != querys.size()) {
+        std::cerr << "[ERROR] Some queries were not found! sample:";
+        for (auto k : misses_sample) std::cerr << " " << k;
+        std::cerr << std::endl;
+        ::close(fd);
+        return 3;
     }
 
-    return nullptr; // 没找到
-}
-
-const bool binary_search_record(std::vector<pgm::Record> records, size_t lo, size_t hi, KeyType target_key){
-    int64_t left = lo;
-    int64_t right = hi;
-    while (left <= right) {
-        int64_t mid = (right + left) / 2;
-        KeyType key = records[mid].key;
-        if (key < target_key) {
-            left = mid + 1;
-        } else if(key > target_key){
-            right = mid - 1;
-        } else {
-            return true;
-        }
-    }
-    return false;
-}
-
-
-int main() {
-    std::string filename = "fb_20M_uint64_unique";
-    // std::string query_filename = "range_query_fb_uu.bin";
-    std::string file = DATASETS + filename;
-    // std::string query_file = DATASETS + query_filename;
-    std::vector<KeyType> data = load_data(file,20000000);
-    // std::vector<RangeQuery> queries = load_queries(query_file);
-    const size_t MemoryBudget = 20*1024*1024;
-    size_t query = 112983;
-    pgm::PGMIndexCost<KeyType, 64, MemoryBudget, pgm::CacheType::DATA> index(data,file,pgm::CacheStrategy::LFU);
-    // std::vector<KeyType> res = index.range_search(5237953133,5255844371);
-    auto range = index.search(query,pgm::ALL_IN_ONCE);
-    std::vector<pgm::Record> records = range.records;
-    size_t lo = range.lo;
-    size_t hi = range.hi;
-    bool result = binary_search_record(records,lo,hi,query);
-    // if (result){
-    //     std::cout << "found key " << query << std::endl;
-    // }else{
-    //     std::cout << "not found" << std::endl;
-    // }
-    std::cout << "Height: " << index.height() << std::endl;
-    auto cache = index.get_data_cache();
-    std::cout << "IO time: " << cache->get_IO_time() << std::endl;
-    // const char* result = binary_search_record(buffer, lo, hi, query);
-    // if (result==nullptr){
-    //     std::cout << "not found" << std::endl;
-    // }else{
-    //     std::cout << "found key " << query << std::endl;
-    // }
-    // for (auto &it:res){
-    //     std::cout << it << ",";
-    // }
-    // std::cout<<std::endl<<res.size()<<std::endl;
-    
+    std::cout << "[PASS] All queries found." << std::endl;
+    ::close(fd);
     return 0;
 }
-
-

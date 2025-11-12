@@ -210,7 +210,7 @@ static struct bplus_node *node_seek(struct bplus_tree *tree, off_t offset)
 static inline void node_flush(struct bplus_tree *tree, struct bplus_node *node)
 {
         if (node != NULL) {
-                int len = pwrite(tree->fd, node, _block_size, node->self);
+                int len = pwrite(tree->fd_direct, node, _block_size, node->self);
                 assert(len == _block_size);
                 cache_defer(tree, node);
         }

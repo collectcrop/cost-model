@@ -16,17 +16,21 @@
 #include "IO/SyncInterface.hpp"
 #include "IO/LibaioInterface.hpp"
 #include "IO/IOuringInterface.hpp"
+#include "queue/mpmc.hpp"
 #include "pgm/pgm_index.hpp"
 
 #include "cache/CacheInterface.hpp"   // ICache + MakeShardedCache
-
+// using Clock = std::chrono::steady_clock;
+using Clock = std::chrono::high_resolution_clock;
 namespace falcon {
 
 struct PointResult { bool found{false}; uint64_t key{0}; };
 struct RangeResult { std::vector<uint64_t> keys; };
 struct FalconStats {
     uint64_t cache_hits{0}, cache_misses{0}, cache_evictions{0}, cache_puts{0};
-    uint64_t physical_ios{0}, io_bytes{0}, io_ns{0};
+    uint64_t physical_ios{0}, logical_ios{0}, io_bytes{0}, io_ns{0};
+    uint64_t index_ns{0};  
+    uint64_t cache_ns{0};  
 };
 
 enum class ReqKind { Point, Range };
@@ -40,7 +44,7 @@ struct Req {
     std::promise<RangeResult>  prom_range;
 };
 
-class MpscQueue {
+class Queue {
     std::mutex mtx;
     std::deque<Req> q;
 public:
@@ -83,8 +87,10 @@ public:
         s.cache_evictions = cs.evictions.load(std::memory_order_relaxed);
         s.cache_puts      = cs.puts.load(std::memory_order_relaxed);
         s.physical_ios    = iostat_ios_.load(std::memory_order_relaxed);
+        s.logical_ios     = iostat_logical_ios_.load(std::memory_order_relaxed);
         s.io_bytes        = iostat_bytes_.load(std::memory_order_relaxed);
         s.io_ns           = iostat_ns_.load(std::memory_order_relaxed);
+        s.cache_ns        = cache_ns_.load(std::memory_order_relaxed);
         return s;
     }
 
@@ -97,10 +103,11 @@ private:
     size_t max_pages_;
     long   max_wait_us_;
     std::atomic<bool> stop_{false};
-    std::atomic<uint64_t> iostat_ios_{0}, iostat_bytes_{0}, iostat_ns_{0};
+    std::atomic<uint64_t> iostat_ios_{0},iostat_logical_ios_{0}, iostat_bytes_{0}, iostat_ns_{0}, cache_ns_{0};
     std::condition_variable cv_;
     std::mutex cv_mtx_;
-    MpscQueue in_;
+    // MpmcQueue<Req> in_{1024*1024};
+    Queue in_;
     std::thread th_;
 
     void run() {
@@ -114,13 +121,14 @@ private:
             auto batch = in_.drain_all();
             if (batch.empty()) continue;
 
+            auto c0 = Clock::now();
             // 1) 汇总页需求（去重、限批）
             std::vector<size_t> pages;
             pages.reserve(1024);
             for (auto &r : batch) {
                 for (size_t p = r.page_lo; p <= r.page_hi; ++p) {
                     pages.push_back(p);
-                    if (pages.size() >= max_pages_) break;
+                    // if (pages.size() >= max_pages_) break;
                 }
             }
             if (pages.empty()) {
@@ -143,19 +151,21 @@ private:
                     need_io.push_back(pgidx);
                 }
             }
-
+            
             // 3) 对缺页进行一次性批量 I/O
             if (!need_io.empty()) {
                 auto [vec, io_stat] = io_->triggerIO_batch(need_io);
                 iostat_ios_.fetch_add(io_stat.physical_ios, std::memory_order_relaxed);
+                iostat_logical_ios_.fetch_add(io_stat.logical_ios, std::memory_order_relaxed);
                 iostat_bytes_.fetch_add(io_stat.bytes, std::memory_order_relaxed);
                 iostat_ns_.fetch_add(io_stat.ns, std::memory_order_relaxed);
+
                 // 回灌缓存 + 加入 ready
                 for (size_t i = 0; i < need_io.size(); ++i) {
                     size_t pgidx = need_io[i];
                     pgm::Page page = std::move(vec[i]); // 可能为空（错误或文件尾）
                     if (page.data && page.valid_len > 0) {
-                        cache_->put(pgidx, pgm::Page{ page.data, page.valid_len }); // 共享句柄即可
+                        cache_->put(pgidx, pgm::Page{ page.data, page.valid_len }); // 共享句柄
                         ready.emplace(pgidx, std::move(page));
                     } else {
                         // 留空页进入 ready；后续 fulfill 会跳过
@@ -163,7 +173,9 @@ private:
                     }
                 }
             }
-
+            auto c1 = Clock::now();
+            cache_ns_.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(c1 - c0).count(), std::memory_order_relaxed);
+            
             // 4) 兑现查询
             for (auto &r : batch) fulfill(r, ready);
         }
@@ -172,6 +184,7 @@ private:
     void fulfill(Req& r, const std::unordered_map<size_t, pgm::Page>& page_map) {
         if (r.kind == ReqKind::Point) {
             PointResult ret{};
+            ret.key = r.key;
             for (size_t p = r.page_lo; p <= r.page_hi; ++p) {
                 auto it = page_map.find(p);
                 if (it == page_map.end()) continue;
@@ -218,7 +231,7 @@ public:
               pgm::IOInterface io_kind,
               size_t memory_budget_bytes,                 
               pgm::CachePolicy cache_policy = pgm::CachePolicy::LRU,
-              size_t cache_shards = 0,
+              size_t cache_shards = 1,
               size_t max_pages_per_batch = 128,
               long max_wait_us = 50,
               size_t workers = 1)
@@ -237,14 +250,20 @@ public:
     }
 
     std::future<PointResult> point_lookup(const K& key) {
+        auto t0 = Clock::now();
         auto [plo, phi] = idx_.estimate_pages_for_key(key);
+        auto t1 = Clock::now();
+        index_ns_.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count(), std::memory_order_relaxed);
         Req r; r.kind = ReqKind::Point; r.page_lo = plo; r.page_hi = phi; r.key = (uint64_t)key;
         std::promise<PointResult> p; auto fut = p.get_future(); r.prom_point = std::move(p);
         dispatch(std::move(r)); return fut;
     }
 
     std::future<RangeResult> range_lookup(const K& lo_key, const K& hi_key) {
+        auto t0 = Clock::now();
         auto [plo, phi] = idx_.estimate_pages_for_range(lo_key, hi_key);
+        auto t1 = Clock::now();
+        index_ns_.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count(), std::memory_order_relaxed);
         Req r; r.kind = ReqKind::Range; r.page_lo = plo; r.page_hi = phi; r.lo_key = lo_key; r.hi_key = hi_key;
         std::promise<RangeResult> p; auto fut = p.get_future(); r.prom_range = std::move(p);
         dispatch(std::move(r)); return fut;
@@ -259,8 +278,11 @@ public:
             agg.cache_evictions += s.cache_evictions;
             agg.cache_puts      += s.cache_puts;
             agg.physical_ios    += s.physical_ios;
+            agg.logical_ios     += s.logical_ios;
             agg.io_bytes        += s.io_bytes;
             agg.io_ns           += s.io_ns;
+            agg.cache_ns        += s.cache_ns;
+            agg.index_ns        += index_ns_;
         }
         return agg;
     }
@@ -269,6 +291,7 @@ private:
     IndexT& idx_;
     std::vector<std::unique_ptr<Worker>> workers_;
     std::atomic<size_t> rr_;
+    std::atomic<time_t> index_ns_ = 0;
     void dispatch(Req&& r) {
         auto i = rr_.fetch_add(1, std::memory_order_relaxed) % workers_.size();
         workers_[i]->submit(std::move(r));

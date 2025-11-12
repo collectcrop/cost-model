@@ -7,7 +7,7 @@ TESTFILE="testfile"
 BS=4096       # block size
 NREQ=100000   # 总请求数
 REPEAT=30      # 每组重复次数
-DEPTHS=(1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384)  # 并发度 1 2 4 8 16 32 64 128 256 512 1024 2048 4096
+DEPTHS=(1 2 4 8 16 32 64 128 256 512 1024)  # 并发度 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384
 
 # 检查测试文件是否存在
 if [ ! -f "$TESTFILE" ]; then
@@ -49,7 +49,7 @@ echo "================================================="
 mkdir -p results
 
 for depth in "${DEPTHS[@]}"; do
-    for mode in psync libaio io_uring; do    #
+    for mode in io_uring; do    # psync libaio io_uring
         result_file="results/${mode}_${depth}.txt"
         rm -f "$result_file"
 

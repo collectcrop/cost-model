@@ -136,8 +136,8 @@ void *worker_io_uring_optimized(void *arg) {
     params.sq_thread_idle = 2000;
 
     // Make ring entries reasonably large to avoid full queue
-    int entries = t->qdepth * 4;
-    if (entries < 256) entries = 256;
+    int entries = t->qdepth;
+    // if (entries < 256) entries = 256;
 
     if (io_uring_queue_init_params(entries, &ring, &params) < 0) {
         // fallback: try without SQPOLL

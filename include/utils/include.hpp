@@ -14,11 +14,13 @@ typedef enum IOInterface {
     IO_URING
 } IOInterface;
 
-typedef enum CacheStrategy {
-    LRU,
-    LFU,
-    FIFO
-} CacheStrategy;
+// typedef enum CacheStrategy {
+//     NONE,
+//     LRU,
+//     LFU,
+//     FIFO
+// } CacheStrategy;
+enum class CachePolicy { NONE, FIFO, LRU, LFU };
 
 typedef enum RangeSearchStrategy {
     LO,
@@ -51,6 +53,7 @@ struct Page{
     size_t valid_len=0;
 };
 
+struct RangeQ { uint64_t lo, hi; };
 
 constexpr size_t RECORD_SIZE   = sizeof(Record);
 constexpr size_t PAGE_SIZE     = 4096;

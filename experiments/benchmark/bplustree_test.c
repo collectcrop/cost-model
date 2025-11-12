@@ -143,7 +143,7 @@ int main(int argc, char* argv[]) {
     char* query_path   = "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique.query.bin";
     char* data_path = "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique";
     char* index_path   = "./index";
-    build_tree(index_path, data_path);
+    // build_tree(index_path, data_path);
     // 读取 query
     FILE* query_file = fopen(query_path, "rb");
     if (!query_file) {

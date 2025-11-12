@@ -10,7 +10,6 @@
 
 namespace pgm {
 
-enum class CachePolicy { FIFO, LRU, LFU };
 
 struct CacheStats {
     std::atomic<uint64_t> hits{0};

@@ -1,0 +1,2 @@
+A_size,B_size,B_unique,threads,build_s,probe_s,wall_s,matches,build_size
+1000000,100000000,1,1,17.9361,0.0242598,17.9604,1000000,100000000

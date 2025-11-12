@@ -34,6 +34,7 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
     returns:
       page_counts: np.array length num_pages, expected counts per page (sum ~= Q * (2eps+1))
       T_pos: np.array length N, expected counts per position
+      Q: queries length
     """
     # 读取 queries 支持文件或直接数组
     
@@ -77,7 +78,7 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
         T_padded = T
     page_counts = T_padded.reshape(num_pages, ipp).sum(axis=1)  # expected counts per page
 
-    return page_counts, T
+    return page_counts, T, Q
 
 def estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, ipp, use_fft=False):
     # map lo->positions then to pages
@@ -158,13 +159,61 @@ def zipf_popularity(N, alpha):
     norm_const = sum(1 / (i ** alpha) for i in range(1, N + 1))
     return np.array([1 / (i ** alpha) / norm_const for i in range(1, N + 1)])
 
-def che_characteristic_time(qs, C):
-    # qs: array of popularity q(i)
-    print("[*] starting solve characteristic time")
-    def f(t):
-        return np.sum(1 - np.exp(-qs * t)) - C
-    # root-finding to solve C = Σ(1 - e^{-q_i t})
-    return brentq(f, 1e-6, 1e6)
+# def che_characteristic_time(qs, C, Q):
+#     # qs: array of popularity q(i)
+#     print("[*] starting solve characteristic time")
+#     m = int(np.sum(qs > 0))
+#     def f(t):
+#         return np.sum(1 - np.exp(-qs * t)) - C
+#     # root-finding to solve C = Σ(1 - e^{-q_i t})
+#     print(C,m)
+#     return brentq(f, 1e-6, 1e6)
+
+def che_characteristic_time(qs, C, t0=1e-9, grow=10.0, max_iter=60):
+    """
+    Solve for t_C in:  C = sum_i (1 - exp(-q_i * t_C))
+    - qs: array-like of per-object request rates or counts (q_i >= 0)
+    - C : cache capacity measured in "number of objects" (or equivalently the unit that matches 1 per object)
+    - Q : (optional) total queries in the window; not used in solving, here just for signature compatibility
+
+    Returns:
+        t_C (float): finite positive solution; 0.0 when C<=0; np.inf when C >= m (no finite solution).
+    """
+    qs = np.asarray(qs, dtype=float)
+    if np.any(~np.isfinite(qs)) or np.any(qs < 0):
+        raise ValueError("qs must be finite and >= 0")
+    m = int(np.sum(qs > 0))
+
+    # Boundary/degenerate cases
+    if C <= 0:
+        return 0.0
+    if C >= m:
+        # No finite solution; in practice "all objects fit" => t_C = +inf
+        return np.inf
+
+    # Scale to improve conditioning
+    qpos = qs[qs > 0]
+    qbar = float(np.mean(qpos)) if qpos.size > 0 else 1.0
+    r = np.where(qs > 0, qs / qbar, 0.0)
+
+    def f_tau(tau):
+        return np.sum(1.0 - np.exp(-r * tau)) - C
+
+    # Bracket automatically on (t0, +inf)
+    a, b = t0, t0
+    fa = f_tau(a)
+    for _ in range(max_iter):
+        b *= grow
+        fb = f_tau(b)
+        if fa * fb <= 0:
+            break
+    else:
+        # Extremely pathological scaling; fall back to a wide static bracket
+        a, b = 1e-12, 1e12
+
+    tau = brentq(f_tau, a, b)
+    return tau / qbar
+
 
 def che_hit_rates(qs, t_C):
     return 1 - np.exp(-qs * t_C)
@@ -205,12 +254,29 @@ def zipf_ratio(C,N,alpha):
     hit_rates = che_hit_rates(qs, t_C)
     return np.sum(qs * hit_rates)
 
-def sample_ratio(C,N,qs):
-    t_C = che_characteristic_time(qs, C)
-    print("[+] successfully solved characteristic_time")
-    hit_rates = che_hit_rates(qs, t_C)
-    return np.sum(qs * hit_rates)
+# def sample_ratio(C,N,qs,Q):
+#     t_C = che_characteristic_time(qs, C, Q)
+#     print("[+] successfully solved characteristic_time")
+#     hit_rates = che_hit_rates(qs, t_C)
+#     return np.sum(qs * hit_rates)
 
+def sample_ratio(C, N, qs, Q):
+    """
+    Return "cache hit ratio" over Q queries.
+    - If t_C is finite: hits = sum_i q_i * h_i with h_i = 1 - exp(-q_i * t_C)
+    - If t_C is +inf (C >= m): use h = max(0, (Q - m)/Q) => total hits = h * Q = max(0, Q - m)
+    """
+    t_C = che_characteristic_time(qs, C)
+    print("[+] successfully solved characteristic_time:", t_C)
+    m = int(np.sum(np.asarray(qs) > 0))
+    if np.isinf(t_C):
+        # All objects fit. Under the "first-time miss only" counting over a length-Q trace:
+        hit_rates = max(0, Q - m)/Q
+        return hit_rates
+
+    # Otherwise, use standard Che hit rates)
+    hit_rates = che_hit_rates(qs, t_C)
+    return float(np.sum(qs * hit_rates))
 def validate_ratio(ratio):
     if ratio >= 1.0:
         h = 1.0
@@ -258,11 +324,11 @@ def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="
         elif type == "sample":
             data = np.fromfile(data_file,dtype=np.uint64)[1:]
             # q = extract_query_distribution(query_file,data,epsilon,ipp)
-            page_counts, Tpos = estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp)
+            page_counts, Tpos, Q = estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp)
             total_page_requests = page_counts.sum()
             q = page_counts / total_page_requests
             q = np.sort(q)[::-1]
-            buffer_ratio = sample_ratio(C, total_pages, q)
+            buffer_ratio = sample_ratio(C, total_pages, q, Q)
         elif type == "zipf":
             buffer_ratio = zipf_ratio(C, total_pages,alpha)
         
@@ -301,7 +367,7 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
     cost_list = []
     h_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(least_eps, 257, 2):
+    for eps in range(least_eps if (least_eps%2==0) else least_eps+1, 257, 2):
         cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s)
         eps_list.append(eps)
         cost_list.append(cost)
@@ -335,14 +401,14 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
     
 
 def main():
-    M = 80*1024*1024
-    data_file = f"books_20M_uint64_unique"
-    query_file = f"books_20M_uint64_unique.1Mtable.bin"
-    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,type="sample",
+    M = 60*1024*1024
+    data_file = f"books_10M_uint64_unique"
+    query_file = f"books_10M_uint64_unique.query.bin"
+    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(1e7),ps=4096,type="sample",
                                                    data_file=data_file,query_file=query_file,s="all_in_once")
     
-    # data_file = f"fb_20M_uint64_unique"
-    # query_file = f"range_query_fb_uu.bin"
-    # getExpectedRangeCostPerEpsilon(n=int(2e7),seg_size=16,M=M,ipp=512,ps=4096,query_file=query_file,data_file=data_file)
+    # data_file = f"fb_10M_uint64_unique"
+    # query_file = f"range_query_1M_uu.bin"
+    # getExpectedRangeCostPerEpsilon(n=int(1e7),seg_size=16,M=M,ipp=512,ps=4096,query_file=query_file,data_file=data_file)
 if __name__ == "__main__":
     main()

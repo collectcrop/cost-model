@@ -36,6 +36,61 @@ std::vector<KeyType> load_queries(const std::string& filename) {
     return queries;
 }
 
+
+// ---------- binary loaders ----------
+template<typename T>
+static std::vector<T> load_binary(const std::string& filename, bool has_header=false) {
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) { throw std::runtime_error("open failed: " + filename); }
+    size_t n = 0;
+    if (has_header) {
+        uint64_t total; in.read(reinterpret_cast<char*>(&total), sizeof(total));
+        n = total;
+    } else {
+        in.seekg(0, std::ios::end);
+        auto bytes = static_cast<size_t>(in.tellg());
+        in.seekg(0, std::ios::beg);
+        n = bytes / sizeof(T);
+    }
+    std::vector<T> v(n);
+    in.read(reinterpret_cast<char*>(v.data()), n * sizeof(T));
+    if (!in) throw std::runtime_error("read failed: " + filename);
+    return v;
+}
+
+// static std::vector<pgm::RangeQ> load_ranges(const std::string& filename) {
+//     std::ifstream in(filename, std::ios::binary);
+//     if (!in) { std::cerr << "open range file failed: " << filename << "\n"; return {}; }
+//     in.seekg(0, std::ios::end);
+//     size_t bytes = static_cast<size_t>(in.tellg());
+//     in.seekg(0, std::ios::beg);
+//     if (bytes % sizeof(pgm::RangeQ) != 0) {
+//         std::cerr << "range file size not multiple of 16 bytes: " << bytes << "\n";
+//         return {};
+//     }
+//     size_t n = bytes / sizeof(pgm::RangeQ);
+//     std::vector<pgm::RangeQ> rq(n);
+//     in.read(reinterpret_cast<char*>(rq.data()), bytes);
+//     return rq;
+// }
+
+std::vector<pgm::RangeQ> load_ranges(const std::string& filename) {
+    std::vector<pgm::RangeQ> queries;
+    std::ifstream fin(filename, std::ios::binary);
+    if (!fin) {
+        std::cerr << "Failed to open file " << filename << std::endl;
+        return queries;
+    }
+
+    pgm::RangeQ rq;
+    while (fin.read(reinterpret_cast<char*>(&rq), sizeof(pgm::RangeQ))) {
+        queries.push_back(rq);
+    }
+
+    return queries;
+}
+
+
 // 提取 key
 uint64_t extract_key(const char* record) {
     uint64_t key;
@@ -71,8 +126,8 @@ uint64_t extract_key(const char* record) {
 // }
 
 bool binary_search_record(pgm::Record* records, size_t lo, size_t hi, KeyType target_key){
-    size_t left = lo/pgm::ITEM_PER_PAGE;
-    size_t right = hi/pgm::ITEM_PER_PAGE;
+    size_t left = lo;
+    size_t right = hi;
     while (left <= right) {
         size_t mid = (right + left) / 2;
         KeyType key = records[mid].key;

@@ -150,8 +150,8 @@ static RunStats run_once(
 }
 
 int main(int argc, char** argv) {
-    std::string query_filename = "books_10M_uint64_unique.query.bin";
-    char* file = "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique";
+    std::string query_filename = "osm_cellids_10M_uint64_unique.query.bin";
+    char* file = "/mnt/home/zwshi/Datasets/SOSD/osm_cellids_10M_uint64_unique";
     std::string query_file = DATASETS + query_filename;
     // if (argc < 6) {
     //     std::cerr << "Usage: " << argv[0] << " <index_name> <query_file> <has_size(0|1)> <max_exp> <repeats>\n";
@@ -165,7 +165,7 @@ int main(int argc, char** argv) {
     // int repeats = std::atoi(argv[5]);   // e.g. 5
     char* index_name = "./index";
     int max_exp = 14;  
-    int repeats = 5;   
+    int repeats = 3;   
     // 0. construct index
     blipp_bulk(ALL_DISK, index_name, file, 10000000);
     // 1. init index (shared)
