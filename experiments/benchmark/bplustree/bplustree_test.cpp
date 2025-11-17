@@ -190,8 +190,8 @@ static int run_queries_multithread(StxDiskKV& kv,
 
 int main(int argc, char* argv[]) {
   // 路径按需修改
-  const char* data_path  = "/mnt/home/zwshi/Datasets/SOSD/wiki_ts_10M_uint64_unique";              // 主数据文件（8B/条）
-  const char* query_path = "/mnt/home/zwshi/Datasets/SOSD/wiki_ts_10M_uint64_unique.query.bin";    // 查询文件（8B/条）
+  const char* data_path  = "/mnt/home/zwshi/Datasets/SOSD/wiki_ts_200M_uint64_unique";              // 主数据文件（8B/条）
+  const char* query_path = "/mnt/home/zwshi/Datasets/SOSD/wiki_ts_200M_uint64_unique.query.bin";    // 查询文件（8B/条）
 
   // 1) 读取 queries
   uint64_t total_queries = 0;
@@ -212,7 +212,7 @@ int main(int argc, char* argv[]) {
   if (!csv) { perror("open csv"); free(queries); return -1; }
   fprintf(csv, "threads,avg_latency_ns,avg_walltime_s,avg_iops\n");
 
-  for (int t = 0; t <= 14; t++) { 
+  for (int t = 0; t <= 10; t++) { 
     int threads = 1 << t;
     double total_latency = 0, total_time = 0, total_iops = 0;
     uint64_t p50=0, p90=0, p99=0;

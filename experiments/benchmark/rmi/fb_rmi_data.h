@@ -1,0 +1,5 @@
+namespace fb_rmi {
+const double L0_PARAMETER0 = 63.499997546906336;
+const double L0_PARAMETER1 = 0.000000000000000004678714777529884;
+char* L1_PARAMETERS;
+} // namespace

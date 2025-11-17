@@ -19,7 +19,7 @@
 #include "queue/mpmc.hpp"
 #include "pgm/pgm_index.hpp"
 
-#include "cache/CacheInterface.hpp"   // ICache + MakeShardedCache
+#include "cache/CacheInterface.hpp"  
 // using Clock = std::chrono::steady_clock;
 using Clock = std::chrono::high_resolution_clock;
 namespace falcon {
@@ -122,7 +122,7 @@ private:
             if (batch.empty()) continue;
 
             auto c0 = Clock::now();
-            // 1) 汇总页需求（去重、限批）
+            // 1) 汇总页需求
             std::vector<size_t> pages;
             pages.reserve(1024);
             for (auto &r : batch) {

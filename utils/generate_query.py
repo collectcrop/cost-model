@@ -208,19 +208,20 @@ def join_partition(keys, queries, page_size=4096, key_size=8,
 
 def main():
     
-    sizeList = [1e7,2e7,3e7,5e7,7e7,9e7,1e8]
+    # sizeList = [1e7,2e7,3e7,5e7,7e7,9e7,1e8,2e8]
+    sizeList = [2e8]
     datasets = ["fb","books","osm_cellids","wiki_ts"]
     """ point """
-    # num_queries = 10000000
-    # for dataset in datasets:
-    #     for size in sizeList:
-    #         print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
-    #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
-    #         keys = raw
-    #         print(f"[*] Loaded {len(keys)} keys.")
-    #         queries = generate_realistic_queries_from_data(keys,num_queries)
-    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
-    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
+    num_queries = 1000000
+    for dataset in datasets:
+        for size in sizeList:
+            print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
+            raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
+            keys = raw
+            print(f"[*] Loaded {len(keys)} keys.")
+            queries = generate_realistic_queries_from_data(keys,num_queries)
+            queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
+            print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
     
     """ range """
     # num_queries = 1000000
@@ -260,18 +261,18 @@ def main():
 
     
     """ partition join"""
-    page_size = 4096
-    H = 4
-    delta = 400
-    epsilon = 16
-    queryfile = "books_100M_uint64_unique.1Mtable4.bin"
-    dataset = "books_100M_uint64_unique"
-    raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
-    keys = raw
-    queries = np.fromfile(f"{DATASETS_DIRECTORY}{queryfile}", dtype=np.uint64)
-    lengths_file=f"{DATASETS_DIRECTORY}{queryfile}.par".replace(".bin","")
-    bitmap_file=f"{DATASETS_DIRECTORY}{queryfile}.bitmap".replace(".bin","")
-    join_partition(keys,queries,page_size,lengths_file=lengths_file,bitmap_file=bitmap_file,H=H,delta=delta,epsilon=epsilon)
+    # page_size = 4096
+    # H = 4
+    # delta = 400
+    # epsilon = 16
+    # queryfile = "books_100M_uint64_unique.1Mtable4.bin"
+    # dataset = "books_100M_uint64_unique"
+    # raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
+    # keys = raw
+    # queries = np.fromfile(f"{DATASETS_DIRECTORY}{queryfile}", dtype=np.uint64)
+    # lengths_file=f"{DATASETS_DIRECTORY}{queryfile}.par".replace(".bin","")
+    # bitmap_file=f"{DATASETS_DIRECTORY}{queryfile}.bitmap".replace(".bin","")
+    # join_partition(keys,queries,page_size,lengths_file=lengths_file,bitmap_file=bitmap_file,H=H,delta=delta,epsilon=epsilon)
             
 if __name__ == '__main__':
     main()

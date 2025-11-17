@@ -2,6 +2,7 @@
 #include <vector>
 #include <cstring>
 #include <cstdint>
+#include <limits>
 #include "include.hpp"
 
 // 定义 KeyType（要和主程序保持一致）
@@ -98,33 +99,6 @@ uint64_t extract_key(const char* record) {
     return key;
 }
 
-// 二分搜索 buffer
-// const char* binary_search_record(const std::vector<char>& buffer, size_t lo, size_t hi, uint64_t target_key) {
-//     size_t left = lo;
-//     size_t right = hi;
-
-//     while (left < right) {
-//         size_t mid = left + (right - left) / 2;
-//         const char* mid_ptr = buffer.data() + mid * sizeof(KeyType); // 注意这里 RECORD_SIZE
-//         uint64_t mid_key = extract_key(mid_ptr);
-
-//         if (mid_key < target_key) {
-//             left = mid + 1;
-//         } else {
-//             right = mid;
-//         }
-//     }
-
-//     if (left < hi) {
-//         const char* candidate = buffer.data() + left * sizeof(KeyType);
-//         uint64_t candidate_key = extract_key(candidate);
-//         if (candidate_key == target_key) {
-//             return candidate;
-//         }
-//     }
-//     return nullptr;
-// }
-
 bool binary_search_record(pgm::Record* records, size_t lo, size_t hi, KeyType target_key){
     size_t left = lo;
     size_t right = hi;
@@ -140,4 +114,59 @@ bool binary_search_record(pgm::Record* records, size_t lo, size_t hi, KeyType ta
         }
     }
     return false;
+}
+
+template<typename T>
+std::vector<T> load_data_pgm_safe(const std::string &filename, size_t n) {
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Failed to open data file: " + filename);
+    }
+
+    std::vector<T> data;
+    data.reserve(n);
+
+    constexpr T SENTINEL = std::numeric_limits<T>::max();
+    T x;
+    size_t cnt = 0, fixed = 0;
+
+    while (cnt < n && in.read(reinterpret_cast<char*>(&x), sizeof(T))) {
+        if (x == SENTINEL) {
+            ++fixed;
+            x = SENTINEL - 1;      
+        }
+        data.push_back(x);
+        ++cnt;
+    }
+
+    std::cerr << "[load_data_pgm_safe] loaded=" << data.size()
+              << ", sentinel_fixed=" << fixed << std::endl;
+
+    return data;
+}
+
+template<typename T>
+std::vector<T> load_queries_pgm_safe(const std::string &filename) {
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Failed to open query file: " + filename);
+    }
+
+    std::vector<T> qs;
+    constexpr T SENTINEL = std::numeric_limits<T>::max();
+
+    T x;
+    size_t fixed = 0;
+    while (in.read(reinterpret_cast<char*>(&x), sizeof(T))) {
+        if (x == SENTINEL) {
+            ++fixed;
+            x = SENTINEL - 1;
+        }
+        qs.push_back(x);
+    }
+
+    std::cerr << "[load_queries_pgm_safe] loaded_queries=" << qs.size()
+              << ", sentinel_fixed=" << fixed << std::endl;
+
+    return qs;
 }

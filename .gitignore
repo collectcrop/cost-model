@@ -1,4 +1,10 @@
 experiments/io_bench/testfile
+*.bin
+*.dat
+*.zip
+*.tar
+*.tar.gz
+*.7z
 *.pdf
 *.png
 *.jpg

@@ -1,6 +1,7 @@
 import math
 import matplotlib.pyplot as plt
 import numpy as np
+import time
 from scipy.optimize import brentq  # 用于解非线性方程
 from scipy.special import zeta     # Riemann zeta 函数
 from collections import Counter
@@ -366,15 +367,45 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
     eps_list = []
     cost_list = []
     h_list = []
+    time_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(least_eps if (least_eps%2==0) else least_eps+1, 257, 2):
+    for eps in range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2):
+        t1 = time.time()
         cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
+        t2 = time.time()
+        print(f"eps: {eps}, cost: {cost}, ratio: {h}, time: {t2-t1}")
+        time_list.append(t2-t1)
     print(eps_list)
     print("cost:",cost_list)
     print("ratio:",h_list)
+    groups = {
+        "8-16":   (8, 16),
+        "16-32":  (16, 32),
+        "32-64":  (32, 64),
+        "64-128": (64, 128),
+    }
+
+    group_times = {name: [] for name in groups}
+
+    for eps, t in zip(eps_list, time_list):
+        for name, (lo, hi) in groups.items():
+            # 左闭右开区间：[lo, hi)
+            if lo <= eps < hi:
+                group_times[name].append(t)
+                break
+
+    group_avg_time = {}
+    for name, ts in group_times.items():
+        if ts:
+            group_avg_time[name] = sum(ts) / len(ts)
+        else:
+            group_avg_time[name] = 0.0  # 或者 None，看你喜好
+
+    print("group avg time:", group_avg_time)
+    
     
     log_filename = f"{query_file}.log".replace(".bin","")
     with open(LOG_DIRECTORY+log_filename,'a') as f:
@@ -401,10 +432,10 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
     
 
 def main():
-    M = 60*1024*1024
-    data_file = f"books_10M_uint64_unique"
-    query_file = f"books_10M_uint64_unique.query.bin"
-    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(1e7),ps=4096,type="sample",
+    M = 100*1024*1024
+    data_file = f"books_70M_uint64_unique"
+    query_file = f"books_70M_uint64_unique.query.bin"
+    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(7e7),ps=4096,type="sample",
                                                    data_file=data_file,query_file=query_file,s="all_in_once")
     
     # data_file = f"fb_10M_uint64_unique"

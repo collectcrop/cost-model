@@ -1,5 +1,5 @@
-// g++ ./my_first_rmi.cpp ./test.cpp -o ./test -g
-#include "my_first_rmi.h"
+// g++ ./fb_rmi.cpp ./test.cpp -o ./test -g
+#include "osm_rmi.h"
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -39,12 +39,11 @@ struct ThreadArgs {
 };
 
 // ========== settings ==========
-const char* DATA_PATH   = "/mnt/home/zwshi/learned-index/cost-model/experiments/benchmark/rmi_data";   
-const char* QUERY_FILE  = "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique.query.bin";   
-const char* DATA_FILE   = "/mnt/home/zwshi/Datasets/SOSD/books_10M_uint64_unique";                             
+const char* DATA_PATH   = "/mnt/home/zwshi/learned-index/cost-model/experiments/benchmark/rmi/rmi_data";   
+const char* QUERY_FILE  = "/mnt/home/zwshi/Datasets/SOSD/osm_cellids_200M_uint64_unique.query.bin";   
+const char* DATA_FILE   = "/mnt/home/zwshi/Datasets/SOSD/osm_cellids_200M_uint64_unique";                             
 
 // ========== global ==========
-std::atomic<size_t> IOs(0);
 std::atomic<int> fd(-1);
 // one-by-one
 // void worker_thread(const std::vector<uint64_t>& queries, int fd) {
@@ -96,15 +95,28 @@ std::atomic<int> fd(-1);
 // all-at-once
 void* worker_thread(void* arg) {
     ThreadArgs* args = (ThreadArgs*)arg;
-    const size_t PAGE = 4096; // O_DIRECT 要求 4KB 对齐
-    size_t keys_per_page = PAGE / sizeof(uint64_t);
+    const size_t PAGE = 4096;
+
+    // 预估一个最大需要的 size：例如 1 个或若干页
+    size_t max_bytes = PAGE;   // 先按 1 页来，后面如果你真的需要 size>PAGE 再调大
+
+    void* aligned_buf = nullptr;
+    if (posix_memalign(&aligned_buf, PAGE, max_bytes) != 0) {
+        perror("posix_memalign");
+        return nullptr;
+    }
+    uint64_t* buf = reinterpret_cast<uint64_t*>(aligned_buf);
 
     timespec c0{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
     auto t0 = timer::now();
-    for (size_t i = args->start; i < args->end; i++){
+
+    size_t local_IOs = 0;
+    size_t not_found = 0;
+
+    for (size_t i = args->start; i < args->end; i++) {
         size_t err;
         auto q = (*(args->queries))[i];
-        uint64_t pos = my_first_rmi::lookup(q, &err);
+        uint64_t pos = osm_rmi::lookup(q, &err);
 
         uint64_t lo = (pos > err ? pos - err : 0);
         uint64_t hi = pos + err;
@@ -112,45 +124,38 @@ void* worker_thread(void* arg) {
         off_t offset = (lo * sizeof(uint64_t)) & ~(PAGE - 1);
         off_t end    = ((hi + 1) * sizeof(uint64_t) + PAGE - 1) & ~(PAGE - 1);
         size_t size  = end - offset;
-        void* aligned_buf = nullptr;
 
-        if (posix_memalign(&aligned_buf, PAGE, size) != 0) {
-            perror("posix_memalign");
-            return nullptr;
-        }
-
-        uint64_t* buf = reinterpret_cast<uint64_t*>(aligned_buf);
+        // 这里只读一页的话，其实 size 没必要用，读 PAGE 就够。否则要确保 size <= max_bytes
         ssize_t n = pread(fd, buf, PAGE, offset);
         if (n < 0) {
             perror("pread");
             continue;
         }
         size_t count = n / sizeof(uint64_t);
-        // binary search
         bool res = std::binary_search(buf, buf + count, q);
-        if (!res) {
-            // std::cout << "not found: " << q << std::endl;
-            args->result.not_found++;
-        }
-        free(aligned_buf);
-        // IOs += (size)/PAGE;
-        IOs += 1;    
+        if (!res) not_found++;
+        local_IOs += 1;
         args->io_pages.push_back(size);
     }
+
     auto t1 = timer::now();
     timespec c1{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
+
+    free(aligned_buf);
+
     auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-    uint64_t cpu_ns = (uint64_t)( (c1.tv_sec - c0.tv_sec) * 1000000000LL + (c1.tv_nsec - c0.tv_nsec) );
+    uint64_t cpu_ns = (uint64_t)((c1.tv_sec - c0.tv_sec) * 1000000000LL +
+                                 (c1.tv_nsec - c0.tv_nsec));
     uint64_t io_wait = (t > (long long)cpu_ns) ? (uint64_t)t - cpu_ns : 0ULL;
 
-    args->result.time_ns = (double)t / (args->end - args->start);
+    args->result.time_ns      = (double)t / (args->end - args->start);
     args->result.total_time_s = t / 1e9;
-    args->result.data_IOs = IOs;
+    args->result.data_IOs     = local_IOs;   // <--- 用局部计数
     args->result.index_cpu_ns = cpu_ns;
     args->result.io_wait_ns   = io_wait;
+    args->result.not_found    = not_found;
     return nullptr;
 }
-
 BenchmarkResult run_experiment(std::vector<KeyType>& queries,
                                int THREADS) {
     size_t total_queries = queries.size();
@@ -192,34 +197,34 @@ BenchmarkResult run_experiment(std::vector<KeyType>& queries,
     r.time_ns /= THREADS;
 
     // === 输出 CDF（每次 run_experiment 都会生成/覆盖）===
-    std::vector<size_t> all_pages;
-    all_pages.reserve(queries.size());
-    for (int i = 0; i < THREADS; i++) {
-        all_pages.insert(all_pages.end(), args[i].io_pages.begin(), args[i].io_pages.end());
-    }
-    std::sort(all_pages.begin(), all_pages.end());
-    std::ofstream cdf_ofs("rmi_query_io_cdf.csv");
-    cdf_ofs << "io_size,cdf\n";
-    const size_t N = all_pages.size();
-    for (size_t i = 0; i < N; ) {
-        size_t v = all_pages[i];
-        size_t j = i + 1;
-        while (j < N && all_pages[j] == v) ++j;
-        double cdf = static_cast<double>(j) / static_cast<double>(N);
-        cdf_ofs << v << "," << cdf << "\n";
-        i = j;
-    }
-    cdf_ofs.close();
+    // std::vector<size_t> all_pages;
+    // all_pages.reserve(queries.size());
+    // for (int i = 0; i < THREADS; i++) {
+    //     all_pages.insert(all_pages.end(), args[i].io_pages.begin(), args[i].io_pages.end());
+    // }
+    // std::sort(all_pages.begin(), all_pages.end());
+    // std::ofstream cdf_ofs("rmi_query_io_cdf.csv");
+    // cdf_ofs << "io_size,cdf\n";
+    // const size_t N = all_pages.size();
+    // for (size_t i = 0; i < N; ) {
+    //     size_t v = all_pages[i];
+    //     size_t j = i + 1;
+    //     while (j < N && all_pages[j] == v) ++j;
+    //     double cdf = static_cast<double>(j) / static_cast<double>(N);
+    //     cdf_ofs << v << "," << cdf << "\n";
+    //     i = j;
+    // }
+    // cdf_ofs.close();
     return r;
 }
 
 int main() {
-    std::string filename = "osm_cellids_10M_uint64_unique";
-    std::string query_filename = "osm_cellids_10M_uint64_unique.query.bin";
+    std::string filename = "osm_cellids_200M_uint64_unique";
+    std::string query_filename = "osm_cellids_200M_uint64_unique.query.bin";
     std::string file = DATASETS + filename;
     std::string query_file = DATASETS + query_filename;
 
-    std::vector<KeyType> data = load_data(file, 10000000);
+    std::vector<KeyType> data = load_data(file, 200000000);
     std::vector<KeyType> queries = load_queries(query_file);
 
     // open data file
@@ -229,15 +234,15 @@ int main() {
         return 1;
     }
     // construct index
-    if (!my_first_rmi::load(DATA_PATH)) {
+    if (!osm_rmi::load(DATA_PATH)) {
         std::cerr << "Failed to load RMI model!" << std::endl;
         return 1;
     }
 
-    std::ofstream ofs("rmi_disk_multithread.csv");
-    ofs << "threads,avg_latency_ns,avg_walltime_s,avg_IOs,index_cpu_ns,io_wait_ns\n";
+    std::ofstream ofs("osm_rmi_disk_multithread.csv");
+    ofs << "baseline,threads,latency_ns,walltime_s,avg_IOs,index_cpu_ns,io_wait_ns\n";
 
-    for (int exp = 0; exp <= 14; exp++) {
+    for (int exp = 0; exp <= 10; exp++) {
         int threads = 1 << exp;
         double avg_latency = 0;
         double avg_wall = 0;
@@ -257,7 +262,7 @@ int main() {
                     << ", Index CPU Time=" << r.index_cpu_ns 
                     << ", IO Time=" << r.io_wait_ns << std::endl;
 
-            ofs << threads << "," << avg_latency << "," << avg_wall
+            ofs << "RMI-disk," << threads << "," << avg_latency << "," << avg_wall
                 << "," << avg_IOs << "," << r.index_cpu_ns << "," << r.io_wait_ns << "\n";
         }
     }

@@ -1,0 +1,5 @@
+namespace books_rmi {
+const double L0_PARAMETER0 = 18.660139846600757;
+const double L0_PARAMETER1 = 0.000000000000000018486937368238285;
+char* L1_PARAMETERS;
+} // namespace

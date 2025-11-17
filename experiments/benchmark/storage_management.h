@@ -307,7 +307,7 @@ class LIPPBTree {
 
 #define ALL_DISK 0
 #define LEAF_DISK 1
-    int MemoryType = ALL_DISK;
+    int MemoryType = LEAF_DISK;
 
 private:
     // void write_data(void *data, long offset, int len) {

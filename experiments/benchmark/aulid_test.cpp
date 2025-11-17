@@ -40,28 +40,50 @@ static u64 read_uint64_from_file(std::ifstream &ifs) {
     return x;
 }
 
-void blipp_bulk(int memory_type, char *index_name, char *key_path, int count) {
-    LIPPBTree<KeyType, ValueType> index;
-    index.init(index_name, true, memory_type);
+void blipp_bulk(LIPPBTree<KeyType, ValueType> *index,
+                int memory_type, const char *index_name,
+                const char *key_path, int count) {
+    index->init(const_cast<char*>(index_name), true, memory_type);
     std::ifstream fin(key_path, std::ios::binary);
-    KeyType *keys = new KeyType[count];
-    fin.read((char *) (keys), sizeof(KeyType) * count);
+    // 先读原始数据
+    std::vector<KeyType> raw_keys(count);
+    fin.read(reinterpret_cast<char*>(raw_keys.data()),
+             sizeof(KeyType) * count);
     fin.close();
 
-    ValueType *values = new ValueType[count];
-    for (int i = 0; i < count; i++) {
-        values[i] = static_cast<ValueType>(i); 
+    // 去重（数据已经是排序好的）
+    std::vector<KeyType> keys;
+    keys.reserve(raw_keys.size());
+    if (!raw_keys.empty()) {
+        keys.push_back(raw_keys[0]);
+        for (size_t i = 1; i < raw_keys.size(); ++i) {
+            if (raw_keys[i] != raw_keys[i - 1]) {
+                keys.push_back(raw_keys[i]);
+            }
+        }
     }
+    int unique_cnt = static_cast<int>(keys.size());
+
+    size_t dup_cnt = raw_keys.size() - keys.size();
+    std::cout << "total keys=" << raw_keys.size()
+              << ", unique keys=" << keys.size()
+              << ", duplicates=" << dup_cnt
+              << " (" << 100.0 * dup_cnt / raw_keys.size() << "%)" << std::endl;
+
+    ValueType *values = new ValueType[unique_cnt];
+    for (int i = 0; i < unique_cnt; i++) {
+        values[i] = static_cast<ValueType>(i);
+    }
+
     std::cout << "start to build... " << std::endl;
-    std::chrono::high_resolution_clock::time_point bulk_start = std::chrono::high_resolution_clock::now();
-    index.bulk_load_entry(keys, values, count);
-    std::chrono::high_resolution_clock::time_point bulk_end = std::chrono::high_resolution_clock::now();
-    long long bulk_lookup_time = std::chrono::duration_cast<std::chrono::nanoseconds>(bulk_end - bulk_start).count();
+    auto bulk_start = std::chrono::high_resolution_clock::now();
+    index->bulk_load_entry(keys.data(), values, unique_cnt);
+    auto bulk_end = std::chrono::high_resolution_clock::now();
+    long long bulk_lookup_time =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(bulk_end - bulk_start).count();
     std::cout << "bulk load time: " << bulk_lookup_time / 1e9 << std::endl;
-    // std::cout << "file size:" << index.report_file_size() << " bytes" << std::endl;
-    delete[]keys;
-    delete[]values;
-    return;
+
+    delete[] values;
 }
 
 // Worker: each线程处理自己的 queries 列表，并累计统计
@@ -150,76 +172,97 @@ static RunStats run_once(
 }
 
 int main(int argc, char** argv) {
-    std::string query_filename = "wiki_ts_10M_uint64_unique.query.bin";
-    char* file = "/mnt/home/zwshi/Datasets/SOSD/wiki_ts_10M_uint64_unique";
-    std::string query_file = DATASETS + query_filename;
-    // if (argc < 6) {
-    //     std::cerr << "Usage: " << argv[0] << " <index_name> <query_file> <has_size(0|1)> <max_exp> <repeats>\n";
-    //     std::cerr << "Example: " << argv[0] << " myindex /path/queries.bin 1 14 5\n";
-    //     return 1;
-    // }
-    // const char* index_name = argv[1];
-    // const char* query_file = argv[2];
-    // int has_size = std::atoi(argv[3]);
-    // int max_exp = std::atoi(argv[4]);   // e.g. 14
-    // int repeats = std::atoi(argv[5]);   // e.g. 5
-    char* index_name = "./index";
-    int max_exp = 14;  
-    int repeats = 3;   
-    // 0. construct index
-    blipp_bulk(ALL_DISK, index_name, file, 10000000);
-    // 1. init index (shared)
-    LIPPBTree<KeyType, ValueType> index;
-    index.init(const_cast<char*>(index_name), false, ALL_DISK);
-    // If your init signature differs, adjust accordingly.
-
-    // 2. read queries from file
-    std::vector<KeyType> all_queries = load_queries(query_file);
-    std::cout << "Loaded queries: " << all_queries.size() << std::endl;
-
-    // prepare csv
-    std::ofstream csv("aulid_multithread.csv", std::ios::out | std::ios::trunc);
-    if (!csv) {
-        std::cerr << "Failed to open CSV output\n";
+    // Usage 提示
+    if (argc < 3) {
+        std::cerr << "Usage:\n  " << argv[0]
+                  << " <dataset_basename> <num_keys> [max_log2_threads] [repeats] [index_name]\n\n"
+                  << "Example:\n  " << argv[0]
+                  << " wiki_ts_10M_uint64_unique 10000000 10 3 ./index\n";
         return 1;
     }
-    csv << "threads,avg_latency_ns,avg_walltime_s,height,avg_IOs\n";
+
+    // 1) 必选参数
+    std::string dataset_basename = argv[1]; // e.g. wiki_ts_10M_uint64_unique
+    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
+
+    // 2) 可选：最大 log2(threads)
+    int max_exp = 10; // 默认 1..2^14
+    if (argc >= 4) {
+        max_exp = std::atoi(argv[3]);
+        if (max_exp < 0) max_exp = 0;
+    }
+
+    // 3) 可选：每个线程数重复次数
+    int repeats = 3;
+    if (argc >= 5) {
+        repeats = std::atoi(argv[4]);
+        if (repeats <= 0) repeats = 1;
+    }
+
+    // 4) 可选：索引文件名
+    std::string index_name_str = "./index";
+    if (argc >= 6) {
+        index_name_str = argv[5];
+    }
+
+    // 5) 拼接数据/查询文件路径
+    std::string data_file  = std::string(DATASETS) + dataset_basename;
+    std::string query_file = std::string(DATASETS) + dataset_basename + ".query.bin";
+
+    char *index_name_c = const_cast<char*>(index_name_str.c_str());
+    char *data_file_c  = const_cast<char*>(data_file.c_str());
+
+    // 6) 构建磁盘索引（bulk_load）
+    std::cout << "Building AULID index from " << data_file
+              << " with " << num_keys << " keys, index file = " << index_name_str << "\n";
+    
+    LIPPBTree<KeyType, ValueType> index;
+    blipp_bulk(&index, LEAF_DISK, index_name_c, data_file_c, (int)num_keys);
+
+    
+    // index.init(index_name_c, false, ALL_DISK);
+
+    // 7) 读取 queries
+    std::vector<KeyType> all_queries = load_queries(query_file);
+    std::cout << "Loaded queries from " << query_file
+              << ", count = " << all_queries.size() << std::endl;
+
+    // 8) 打开 CSV：<dataset_basename>_aulid_multithread.csv
+    std::string csv_name = dataset_basename + "_aulid_multithread.csv";
+    std::ofstream csv(csv_name, std::ios::out | std::ios::trunc);
+    if (!csv) {
+        std::cerr << "Failed to open CSV output: " << csv_name << "\n";
+        return 1;
+    }
+    csv << "baseline,threads,latency_ns,walltime_s,avg_IOs\n";
     csv << std::fixed << std::setprecision(6);
 
-    // 3. loop over power-of-two thread counts
+    // 9) 遍历线程数（1, 2, 4, ..., 2^max_exp）
     for (int e = 0; e <= max_exp; ++e) {
         uint64_t threads = 1ULL << e;
         if (threads > all_queries.size()) threads = all_queries.size();
-        std::cout << "Testing threads=" << threads << " repeats=" << repeats << " ...\n";
+        if (threads == 0) threads = 1;
 
-        double sum_lat_ns = 0;
-        double sum_wall = 0;
-        double sum_height = 0;
-        double sum_ios = 0;
+        std::cout << "Testing threads=" << threads
+                  << " repeats=" << repeats << " ...\n";
+
 
         for (int r = 0; r < repeats; ++r) {
-            RunStats rs = run_once(&index, all_queries, (int)threads);
-            std::cout << "  run " << (r+1) << " threads=" << threads
+            RunStats rs = run_once(&index, all_queries, static_cast<int>(threads));
+            std::cout << "  run " << (r + 1)
+                      << " threads=" << threads
                       << " avg_lat_ns=" << rs.avg_latency_ns
                       << " wall_s=" << rs.wall_seconds
                       << " avg_block=" << rs.avg_block_per_lookup
                       << " avg_ic=" << rs.avg_inblock_per_lookup << "\n";
-            sum_lat_ns += rs.avg_latency_ns;
-            sum_wall += rs.wall_seconds;
-            sum_height += rs.avg_block_per_lookup;
-            sum_ios += rs.avg_inblock_per_lookup;
-        }
-        double avg_lat_ns = sum_lat_ns / repeats;
-        double avg_wall = sum_wall / repeats;
-        double avg_height = sum_height / repeats;
-        double avg_ios = sum_ios / repeats;
 
-        csv << threads << "," << avg_lat_ns << "," << avg_wall << "," << avg_height << "," << avg_ios << "\n";
-        csv.flush();
-        std::cout << "-> threads=" << threads << " done. avg_lat_ns=" << avg_lat_ns << " avg_ios=" << avg_ios << "\n";
+            csv << "AULID," << threads << "," << rs.avg_latency_ns << "," << rs.wall_seconds
+                << "," << rs.avg_block_per_lookup << "\n";
+            csv.flush();
+        }
     }
 
     csv.close();
-    std::cout << "Finished. Results saved to aulid_multithread.csv\n";
+    std::cout << "Finished. Results saved to " << csv_name << "\n";
     return 0;
 }

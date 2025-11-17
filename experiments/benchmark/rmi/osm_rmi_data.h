@@ -1,0 +1,5 @@
+namespace osm_rmi {
+const double L0_PARAMETER0 = -11.290599596217199;
+const double L0_PARAMETER1 = 0.00000000000000001323086781584376;
+char* L1_PARAMETERS;
+} // namespace
