@@ -24,8 +24,9 @@ struct ApproxPosExt {
 
 using KeyType = uint64_t;
 #define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
-#define Epsilon 76
-#define EpsilonRecur 32
+#define Epsilon 16
+#define EpsilonRecur 4
+#define use_direct true
 
 struct BenchmarkResult {
     size_t epsilon;
@@ -99,6 +100,7 @@ void* query_worker(void* arg) {
     ThreadArgs* args = (ThreadArgs*)arg;
     const size_t PAGE = 4096;
     int IOs = 0;
+    timespec c0{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
     auto t0 = timer::now();
     for (size_t i = args->start; i < args->end; i++) {
         auto q = (*(args->queries))[i];
@@ -117,12 +119,18 @@ void* query_worker(void* arg) {
         args->io_pages.push_back(size);
     }
     auto t1 = timer::now();
-
+    timespec c1{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
     auto t = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    uint64_t cpu_ns = (uint64_t)((c1.tv_sec - c0.tv_sec) * 1000000000LL +
+                                 (c1.tv_nsec - c0.tv_nsec));
+    uint64_t io_wait = (t > (long long)cpu_ns) ? (uint64_t)t - cpu_ns : 0ULL;
+
     args->result.time_ns = (double)t / (args->end - args->start);
     args->result.total_time_s = t / 1e9;
     args->result.data_IOs = IOs;
     args->result.height = args->index->height();
+    args->result.index_cpu_ns = cpu_ns;
+    args->result.io_wait_ns   = io_wait;
 
     return nullptr;
 }
@@ -161,10 +169,14 @@ BenchmarkResult run_experiment(std::vector<KeyType>& queries,
     r.height = index.height();
     r.data_IOs = 0;
     r.time_ns = 0;
+    r.index_cpu_ns  = 0;
+    r.io_wait_ns    = 0;
 
     for (int i = 0; i < THREADS; i++) {
         r.time_ns += args[i].result.time_ns;
         r.data_IOs += args[i].result.data_IOs;
+        r.index_cpu_ns  += args[i].result.index_cpu_ns;
+        r.io_wait_ns    += args[i].result.io_wait_ns;
     }
     r.time_ns /= THREADS;
 
@@ -231,7 +243,9 @@ int main(int argc, char** argv) {
     pgm::PGMIndex<KeyType, Epsilon, EpsilonRecur> index(data);
 
     // 7) 打开数据文件
-    int data_fd = open(file.c_str(), O_RDONLY | O_DIRECT);
+    int data_fd;
+    if (use_direct){ data_fd = open(file.c_str(), O_RDONLY | O_DIRECT); }
+    else { data_fd = open(file.c_str(), O_RDONLY);}
     if (data_fd < 0) {
         perror("open data file");
         return 1;
@@ -246,7 +260,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    ofs << "baseline,threads,latency_ns,walltime_s,height,avg_IOs\n";
+    ofs << "baseline,threads,latency_ns,walltime_s,height,avg_IOs,mem_time_s,io_time_s\n";
 
     // 9) 线程实验循环
     for (int exp = 0; exp <= max_exp; exp++) {
@@ -262,15 +276,19 @@ int main(int argc, char** argv) {
             avg_wall    = r.total_time_s;
             avg_IOs     = r.data_IOs;
             height      = r.height;
-
+            double mem_time_s = r.index_cpu_ns / 1e9;
+            double io_time_s  = r.io_wait_ns   / 1e9;
             std::cout << "threads=" << threads
                       << ", avg_latency=" << avg_latency << " ns"
                       << ", wall=" << avg_wall << " s"
                       << ", IOs=" << avg_IOs
-                      << ", height=" << height << std::endl;
+                      << ", height=" << height 
+                      << ", mem_time_s=" << mem_time_s
+                      << ", io_time_s=" << io_time_s << std::endl;
 
             ofs << baseline << "," << threads << "," << avg_latency << "," << avg_wall
-                << "," << height << "," << avg_IOs << "\n";
+                << "," << height << "," << avg_IOs 
+                << "," << mem_time_s << "," << io_time_s <<"\n";
         }
     }
 

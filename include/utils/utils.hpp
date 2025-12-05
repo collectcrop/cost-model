@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cstdint>
 #include <limits>
+#include <fstream>
 #include "include.hpp"
 
 // 定义 KeyType（要和主程序保持一致）
@@ -143,6 +144,44 @@ std::vector<T> load_data_pgm_safe(const std::string &filename, size_t n) {
               << ", sentinel_fixed=" << fixed << std::endl;
 
     return data;
+}
+
+std::vector<pgm::RangeQ> load_ranges_pgm_safe(const std::string& filename) {
+    std::ifstream in(filename, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("Failed to open range file: " + filename);
+    }
+
+    std::vector<pgm::RangeQ> ranges;
+    constexpr KeyType SENTINEL = std::numeric_limits<KeyType>::max();
+
+    pgm::RangeQ q;
+    size_t total = 0;
+    size_t skipped_sentinel = 0;
+
+    while (in.read(reinterpret_cast<char*>(&q), sizeof(pgm::RangeQ))) {
+        ++total;
+
+        // 跳过包含 SENTINEL 的区间（lo 或 hi 任一为哨兵值）
+        if (q.lo == SENTINEL || q.hi == SENTINEL) {
+            ++skipped_sentinel;
+            continue;
+        }
+
+        //（可选）保证 lo <= hi，如果你的生成脚本已经保证这一点，可以删掉
+        if (q.lo > q.hi) {
+            std::swap(q.lo, q.hi);
+        }
+
+        ranges.push_back(q);
+    }
+
+    std::cerr << "[load_ranges_pgm_safe] total_ranges=" << total
+              << ", kept=" << ranges.size()
+              << ", skipped_sentinel=" << skipped_sentinel
+              << std::endl;
+
+    return ranges;
 }
 
 template<typename T>

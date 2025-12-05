@@ -14,7 +14,7 @@
 #include <fcntl.h>
 #include <iomanip>
 
-#include "pgm/pgm_index.hpp"
+#include "rmi/books_rmi.h"
 #include "utils/include.hpp"
 #include "utils/utils.hpp"
 #include "FALCON/Falcon.hpp"
@@ -125,12 +125,12 @@ static BenchmarkResult bench_range(std::vector<KeyType> data,
 
 int main(int argc, char** argv) {
     // 数据与查询文件（按需修改）
-    const std::string dataset  = "fb_10M_uint64_unique";        // fb_10M_uint64_unique
+    const std::string dataset  = "fb_200M_uint64_unique";        // fb_10M_uint64_unique
     const std::string datafile = std::string(DATASETS) + dataset;
-    const std::string rangefile= std::string(DATASETS) + "range_query_1M_uu.bin";       // range_query_1M_uu.bin
+    const std::string rangefile= std::string(DATASETS) + "fb_200M_uint64_unique.range.bin";     
     // 基础参数
     const int    N_KEYS     = 10000000;
-    const size_t MEM_BUDGET = 10ull * 1024 * 1024; 
+    const size_t MEM_BUDGET = 60ull * 1024 * 1024; 
     size_t repeat = 5;
     // 读取数据与 range 查询
     auto data   = load_data(datafile, N_KEYS);
@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
     const pgm::CachePolicy policy = pgm::CachePolicy::LRU;
 
     for (int r = 0; r < repeat; ++r) {
-        for (size_t eps : {16}) {           // 8,12,16,20,24,32,48,64,128
+        for (size_t eps : {2,4,8,12,16,20,24,32,48,64,128}) {           // 8,12,16,20,24,32,48,64,128
             size_t idx_est = 16ull * N_KEYS / (2*eps);
             size_t buf_budget = (MEM_BUDGET > idx_est) ? (MEM_BUDGET - idx_est) : 0;
 

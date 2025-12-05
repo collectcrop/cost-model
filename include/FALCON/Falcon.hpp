@@ -42,6 +42,7 @@ struct Req {
     uint64_t lo_key, hi_key;
     std::promise<PointResult>  prom_point;
     std::promise<RangeResult>  prom_range;
+    uint64_t ts_dispatch_ns;
 };
 
 class Queue {
@@ -256,6 +257,8 @@ public:
         index_ns_.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count(), std::memory_order_relaxed);
         Req r; r.kind = ReqKind::Point; r.page_lo = plo; r.page_hi = phi; r.key = (uint64_t)key;
         std::promise<PointResult> p; auto fut = p.get_future(); r.prom_point = std::move(p);
+        r.ts_dispatch_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::high_resolution_clock::now().time_since_epoch()).count();
         dispatch(std::move(r)); return fut;
     }
 
@@ -289,6 +292,115 @@ public:
 
 private:
     IndexT& idx_;
+    std::vector<std::unique_ptr<Worker>> workers_;
+    std::atomic<size_t> rr_;
+    std::atomic<time_t> index_ns_ = 0;
+    void dispatch(Req&& r) {
+        auto i = rr_.fetch_add(1, std::memory_order_relaxed) % workers_.size();
+        workers_[i]->submit(std::move(r));
+    }
+};
+
+
+template <typename K, typename RMIIndexT>
+class FalconRMI {
+public:
+    FalconRMI(RMIIndexT& index,
+              int data_fd,
+              pgm::IOInterface io_kind,
+              size_t memory_budget_bytes,
+              pgm::CachePolicy cache_policy = pgm::CachePolicy::LRU,
+              size_t cache_shards = 1,
+              size_t max_pages_per_batch = 128,
+              long max_wait_us = 50,
+              size_t workers = 1,
+              size_t n = 0)
+        : idx_(index),n_(n) {
+        workers_.reserve(workers);
+        for (size_t i = 0; i < workers; ++i) {
+            auto cache = pgm::MakeShardedCache(cache_policy,
+                                               memory_budget_bytes,
+                                               pgm::PAGE_SIZE,
+                                               cache_shards); 
+            workers_.emplace_back(
+                std::make_unique<Worker>(data_fd,
+                                         io_kind,
+                                         std::move(cache),
+                                         max_pages_per_batch,
+                                         max_wait_us));
+        }
+        rr_.store(0, std::memory_order_relaxed);
+    }
+
+    std::future<PointResult> point_lookup(const K& key) {
+        size_t err = 0; 
+        auto t0 = Clock::now();
+        auto pos = idx_.lookup(key,&err);
+        auto t1 = Clock::now();
+        index_ns_.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count(), std::memory_order_relaxed);
+
+        size_t pos_lo = (pos<=err)?0:pos-err;
+        size_t pos_hi = pos+err;
+        if (pos_hi>=n_) pos_hi = n_-1;
+
+        // ====================================
+
+        size_t plo = pos_lo / pgm::ITEM_PER_PAGE;
+        size_t phi = pos_hi / pgm::ITEM_PER_PAGE;
+
+        Req r; r.kind = ReqKind::Point; r.page_lo = plo; r.page_hi = phi; r.key = (uint64_t)key;
+        std::promise<PointResult> p; auto fut = p.get_future(); r.prom_point = std::move(p);
+        dispatch(std::move(r)); return fut;
+    }
+
+    std::future<RangeResult> range_lookup(const K& lo_key, const K& hi_key) {
+        size_t err = 0; 
+        auto t0 = Clock::now();
+        auto pos1 = idx_.lookup(lo_key,&err);
+        size_t pos_lo1 = (pos1<=err)?0:pos1-err;
+        size_t pos_hi1 = pos1+err;
+        if (pos_hi1>=n_) pos_hi1 = n_-1;
+        auto pos2 = idx_.lookup(hi_key,&err);
+        size_t pos_lo2 = (pos2<=err)?0:pos2-err;
+        size_t pos_hi2 = pos2+err;
+        if (pos_hi2>=n_) pos_hi2 = n_-1;
+
+        auto t1 = Clock::now();
+        index_ns_.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count(), std::memory_order_relaxed);
+        // ====================================
+        size_t pos_lo = std::min(pos_lo1, pos_lo2);
+        size_t pos_hi = std::max(pos_hi1, pos_hi2);
+
+        size_t plo = pos_lo / pgm::ITEM_PER_PAGE;
+        size_t phi = pos_hi / pgm::ITEM_PER_PAGE;
+
+        Req r; r.kind = ReqKind::Range; r.page_lo = plo; r.page_hi = phi; r.lo_key = lo_key; r.hi_key = hi_key;
+        std::promise<RangeResult> p; auto fut = p.get_future(); r.prom_range = std::move(p);
+        dispatch(std::move(r)); return fut;
+    }
+
+    FalconStats stats() const {
+        FalconStats agg{};
+        for (auto& w : workers_) {
+            auto s = w->stats();
+            agg.cache_hits      += s.cache_hits;
+            agg.cache_misses    += s.cache_misses;
+            agg.cache_evictions += s.cache_evictions;
+            agg.cache_puts      += s.cache_puts;
+            agg.physical_ios    += s.physical_ios;
+            agg.logical_ios     += s.logical_ios;
+            agg.io_bytes        += s.io_bytes;
+            agg.io_ns           += s.io_ns;
+            agg.cache_ns        += s.cache_ns;
+            agg.index_ns        += index_ns_;
+        }
+        return agg;
+    }
+
+
+private:
+    RMIIndexT& idx_;
+    size_t n_;
     std::vector<std::unique_ptr<Worker>> workers_;
     std::atomic<size_t> rr_;
     std::atomic<time_t> index_ns_ = 0;

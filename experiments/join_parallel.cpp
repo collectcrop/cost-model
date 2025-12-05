@@ -78,10 +78,15 @@ static void probe_worker(falcon::FalconPGM<Key, EPS, 4>* engine,
         uint64_t local = 0;
         for (auto &p : pendings) {
             auto rr = p.fut.get();                  // [lo,hi] 内的 B 键（升序）
-            // 只对该窗口内的探针键做 membership 统计（口径 A）
-            for (size_t i = p.qL; i < p.qR; ++i) {
-                if (std::binary_search(rr.keys.begin(), rr.keys.end(), queries[i]))
-                    ++local;
+            size_t i = p.qL, j = 0;
+            const auto &ret_keys = rr.keys;
+            size_t qn = p.qR - p.qL;
+            while (i < p.qR && j < ret_keys.size()) {
+                uint64_t qk = queries[i];
+                uint64_t rk = ret_keys[j];
+                if (rk < qk) { ++j; }
+                else if (rk == qk) { ++local; ++i; ++j; }
+                else { ++i; }
             }
         }
         matched_acc.fetch_add(local, std::memory_order_relaxed);
@@ -182,7 +187,7 @@ static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（�
     auto st = engine.stats();
     Stats s;
     s.wall_ns       = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
-    s.avg_latency_ns= double(s.wall_ns) / std::max<size_t>(1, specs.size());
+    s.avg_latency_ns = double(s.wall_ns) / std::max<size_t>(1, queries.size());
     s.hit_ratio     = (st.cache_hits + st.cache_misses) ? double(st.cache_hits) / double(st.cache_hits + st.cache_misses) : 0.0;
     s.physical_ios  = st.physical_ios;
     s.io_ns         = st.io_ns;
@@ -204,20 +209,20 @@ static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（�
 // }
 
 int main(int argc, char** argv) {
-    std::string build_file = std::string(DATASETS) + "books_100M_uint64_unique";         
+    std::string build_file = std::string(DATASETS) + "books_200M_uint64_unique";         
     std::string probe_bin, probe_par, probe_bitmap; 
-    probe_bin = std::string(DATASETS) + "books_100M_uint64_unique.1Mtable4.bin";
-    probe_par = std::string(DATASETS) + "books_100M_uint64_unique.1Mtable4.par";
-    probe_bitmap = std::string(DATASETS) + "books_100M_uint64_unique.1Mtable4.bitmap";
+    probe_bin = std::string(DATASETS) + "books_200M_uint64_unique.1Mtable.bin";
+    probe_par = std::string(DATASETS) + "books_200M_uint64_unique.1Mtable.par";
+    probe_bitmap = std::string(DATASETS) + "books_200M_uint64_unique.1Mtable.bitmap";
     std::string datafile_B = build_file;         
     int threads = 1;
-    size_t epsilon = 16;
-    size_t mem_mib = 40;
+    // size_t epsilon = 16;
+    size_t mem_mib = 10;
     std::string policy_str = "LRU";
     std::string io_str = "uring";
     bool use_odirect = true;
     int trials = 10;
-    std::string csv_out = "books-100M-join.4.csv";
+    std::string csv_out = "books-200M-join.csv";
 
     // 加载 B 的 key（注意：需与 datafile_B 中记录顺序一致）
     auto build_keys = load_binary<Key>(build_file, /*has_header=*/false);
@@ -245,11 +250,13 @@ int main(int argc, char** argv) {
 
     // CSV
     std::ofstream ofs(csv_out, std::ios::out | std::ios::trunc);
-    ofs << "threads,avg_latency_ns,avg_walltime_s,avg_IOs,data_IO_time\n";
+    ofs << "threads,epsilon,avg_latency_ns,avg_walltime_s,avg_IOs,data_IO_time\n";
     ofs << std::fixed << std::setprecision(6);
 
     auto bench_once = [&](auto const_tag){
         constexpr size_t EPS = decltype(const_tag)::value;
+        // size_t idx_est = 16ull * N_KEYS / (2*EPS);
+        // size_t buf_budget = (MEM_BUDGET > idx_est) ? (MEM_BUDGET - idx_est) : 0;
         for (int t=0;t<trials;++t) {
             auto s = run_join_falcon<EPS>(
                 build_keys, datafile_B, specs, queries,
@@ -267,27 +274,28 @@ int main(int argc, char** argv) {
                       << std::endl;
 
             ofs << threads << "," 
+                << EPS << "," 
                 << s.avg_latency_ns << "," 
-                << s.wall_ns << "," 
+                << (s.wall_ns/1e9) << "," 
                 << s.physical_ios << "," 
                 << s.io_ns << "\n";
             ofs.flush();
         }
     };
-
-    switch (epsilon) {
-        case 8:   bench_once(std::integral_constant<size_t,8>{}); break;
-        case 12:  bench_once(std::integral_constant<size_t,12>{}); break;
-        case 16:  bench_once(std::integral_constant<size_t,16>{}); break;
-        case 20:  bench_once(std::integral_constant<size_t,20>{}); break;
-        case 24:  bench_once(std::integral_constant<size_t,24>{}); break;
-        case 32:  bench_once(std::integral_constant<size_t,32>{}); break;
-        case 48:  bench_once(std::integral_constant<size_t,48>{}); break;
-        case 64:  bench_once(std::integral_constant<size_t,64>{}); break;
-        case 128: bench_once(std::integral_constant<size_t,128>{}); break;
-        default:  bench_once(std::integral_constant<size_t,16>{}); break;
+    for (auto epsilon : {8, 12, 16, 20, 24, 32, 48, 64, 128}){
+        switch (epsilon) {
+            case 8:   bench_once(std::integral_constant<size_t,8>{}); break;
+            case 12:  bench_once(std::integral_constant<size_t,12>{}); break;
+            case 16:  bench_once(std::integral_constant<size_t,16>{}); break;
+            case 20:  bench_once(std::integral_constant<size_t,20>{}); break;
+            case 24:  bench_once(std::integral_constant<size_t,24>{}); break;
+            case 32:  bench_once(std::integral_constant<size_t,32>{}); break;
+            case 48:  bench_once(std::integral_constant<size_t,48>{}); break;
+            case 64:  bench_once(std::integral_constant<size_t,64>{}); break;
+            case 128: bench_once(std::integral_constant<size_t,128>{}); break;
+            default:  bench_once(std::integral_constant<size_t,16>{}); break;
+        }
     }
-
     ofs.close();
     return 0;
 }

@@ -6,6 +6,7 @@
 #include <string>
 #include <fstream>
 #include <type_traits>
+#include <cmath>
 
 class LatencyRecorder {
 public:
@@ -22,6 +23,20 @@ public:
         for (auto v : lat_ns_) sum += v;
         return double(sum) / lat_ns_.size();
     }
+
+    uint64_t get_percentile(double p) const {
+        if (lat_ns_.empty()) return 0;
+        std::vector<uint64_t> tmp = lat_ns_;   
+        size_t n = tmp.size();
+        // p=0.99 → 取 ceil(0.99*n)-1
+        size_t k = std::min(n - 1, (size_t)std::max<size_t>(0, (size_t)std::ceil(p * n) - 1));
+        std::nth_element(tmp.begin(), tmp.begin() + k, tmp.end());
+        return tmp[k];
+    }
+
+    uint64_t p50() const { return get_percentile(0.50); }
+    uint64_t p95() const { return get_percentile(0.95); }
+    uint64_t p99() const { return get_percentile(0.99); }
 
     // 包一层：测量一个可调用对象（lambda / 函数），并记录到 qid
     template<class Fn>

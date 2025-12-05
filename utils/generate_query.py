@@ -34,6 +34,7 @@ def generate_realistic_queries_from_data(keys, num_queries=100000, seed=42):
     queries.extend(np.random.choice(keys, size=uniform_queries, replace=False))
 
     queries = np.array(queries[:num_queries], dtype=np.uint64)
+    np.random.shuffle(queries)
     return queries
 
 def generate_range_queries(num_queries, key_space_size,
@@ -78,6 +79,55 @@ def generate_range_queries(num_queries, key_space_size,
     # return [(lo, hi), ...] list
     queries = list(zip(starts, ends))
     queries = np.array(queries[:num_queries], dtype=np.uint64)
+    return queries
+
+def generate_range_queries_from_data(keys, num_queries,
+                                     start_dist='uniform',
+                                     length_dist='exponential',
+                                     max_length_keys=100000,  # 以“key 个数”为单位
+                                     exp_scale=100,
+                                     seed=42):
+    np.random.seed(seed)
+    keys = np.asarray(keys, dtype=np.uint64)
+    n = len(keys)
+    if n == 0:
+        raise ValueError("keys is empty")
+
+    # ---- 1. 生成起点下标 start_idx ----
+    if start_dist == 'uniform':
+        # 均匀落在整个 key 数组的下标空间
+        start_idx = np.random.randint(0, n, size=num_queries)
+    elif start_dist == 'normal':
+        # 以中间为均值的高斯分布, 再截断到合法下标
+        mean = n // 2
+        std = n // 6
+        start_idx = np.random.normal(loc=mean, scale=std, size=num_queries).astype(int)
+        start_idx = np.clip(start_idx, 0, n - 1)
+    else:
+        raise ValueError(f"Unsupported start_dist: {start_dist}")
+
+    # ---- 2. 生成长度 (以 key 个数为单位) ----
+    if length_dist == 'uniform':
+        lengths = np.random.randint(1, max_length_keys + 1, size=num_queries)
+    elif length_dist == 'exponential':
+        lengths = np.random.exponential(scale=exp_scale, size=num_queries).astype(int) + 1
+        lengths = np.clip(lengths, 1, max_length_keys)
+    else:
+        raise ValueError(f"Unsupported length_dist: {length_dist}")
+
+    # ---- 3. 根据起点和长度计算终点下标 ----
+    end_idx = start_idx + lengths - 1
+    end_idx = np.clip(end_idx, 0, n - 1)
+
+    # 为保险起见保证 lo_idx <= hi_idx
+    lo_idx = np.minimum(start_idx, end_idx)
+    hi_idx = np.maximum(start_idx, end_idx)
+
+    # ---- 4. 映射回真实 key 值 ----
+    lo_keys = keys[lo_idx]
+    hi_keys = keys[hi_idx]
+
+    queries = np.stack([lo_keys, hi_keys], axis=1).astype(np.uint64)
     return queries
 
 def generate_join_table_from_data(keys, num_queries=100000, seed=42,
@@ -196,8 +246,10 @@ def join_partition(keys, queries, page_size=4096, key_size=8,
     print("Total Pages (Ref):", totalPagesRef)
     print("Total Queries:", sum(lengths))
     # show numbers of range and point
-    print("Range:", sum(bitmap))
-    print("Point:", sum(lengths) - sum(bitmap))
+    range_queries = sum(N for N, b in zip(lengths, bitmap) if b == 1)
+    point_queries = sum(N for N, b in zip(lengths, bitmap) if b == 0)
+    print("Range queries:", range_queries)
+    print("Point queries:", point_queries)
     
     # save to file
     np.array(lengths, dtype=np.int64).tofile(lengths_file)
@@ -209,33 +261,8 @@ def join_partition(keys, queries, page_size=4096, key_size=8,
 def main():
     
     # sizeList = [1e7,2e7,3e7,5e7,7e7,9e7,1e8,2e8]
-    sizeList = [2e8]
-    datasets = ["fb","books","osm_cellids","wiki_ts"]
-    """ point """
-    num_queries = 1000000
-    for dataset in datasets:
-        for size in sizeList:
-            print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
-            raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
-            keys = raw
-            print(f"[*] Loaded {len(keys)} keys.")
-            queries = generate_realistic_queries_from_data(keys,num_queries)
-            queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
-            print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
-    
-    """ range """
-    # num_queries = 1000000
-    # queries = generate_range_queries(num_queries, 8000000000,
-    #                              start_dist='uniform',
-    #                              length_dist='uniform',
-    #                              max_length=5000000,
-    #                              exp_scale=10
-    #                              )
-    # queries.tofile(f"{DATASETS_DIRECTORY}range_query_{int(num_queries/1e6)}M_uu.bin")
-    # print(f"[+] save queries to {DATASETS_DIRECTORY}range_query.bin successfully!")
-    
-    """ join """
-    # datasets = ["books"]
+    # datasets = ["fb","books","osm_cellids","wiki_ts"]
+    # """ point """
     # num_queries = 1000000
     # for dataset in datasets:
     #     for size in sizeList:
@@ -243,9 +270,57 @@ def main():
     #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
     #         keys = raw
     #         print(f"[*] Loaded {len(keys)} keys.")
-    #         queries = generate_join_table_from_data(keys,num_queries,num_segments=20,active_segments=1,skew=1)
-    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin")
-    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin successfully!")
+    #         queries = generate_realistic_queries_from_data(keys,num_queries)
+    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
+    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
+    
+    """ range """
+    # num_queries = 4000000
+    # queries = generate_range_queries(num_queries, 8000000000,
+    #                              start_dist='uniform',
+    #                              length_dist='uniform',
+    #                              max_length=5000000,
+    #                              exp_scale=10
+    #                              )
+    # queries.tofile(f"{DATASETS_DIRECTORY}range_query_{int(num_queries/1e6)}M_uu.bin")
+    # print(f"[+] save queries to {DATASETS_DIRECTORY}range_query_{int(num_queries/1e6)}M_uu.bin successfully!")
+    
+    # datasets = ["fb","books","osm_cellids","wiki_ts"]
+    # size = 2e8
+    # num_queries = 500000
+    # for dataset in datasets:
+    #     raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique",
+    #                     dtype=np.uint64)
+    #     keys = raw        # SOSD 已排序 key
+
+    #     queries = generate_range_queries_from_data(
+    #         keys,
+    #         num_queries,
+    #         start_dist='uniform',      # 或 'normal'
+    #         length_dist='uniform', # 或 'uniform'
+    #         max_length_keys=5000,      # 这里是“key 个数”的最大跨度
+    #         exp_scale=100,
+    #         seed=42
+    #     )
+
+    #     # 保存为 [lo0,hi0, lo1,hi1, ...] 的 uint64 流
+    #     out_path = f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.range.bin"
+    #     queries.tofile(out_path)
+    #     print(f"[+] save range queries to {out_path} successfully!")
+    
+    """ join """
+    sizeList = [2e8]
+    datasets = ["books"]
+    num_queries = 1000000
+    for dataset in datasets:
+        for size in sizeList:
+            print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
+            raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
+            keys = raw
+            print(f"[*] Loaded {len(keys)} keys.")
+            queries = generate_join_table_from_data(keys,num_queries,num_segments=20,active_segments=5,skew=1)
+            queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin")
+            print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable.bin successfully!")
     
     # datasets = ["books"]
     # num_queries = 100000
@@ -261,18 +336,18 @@ def main():
 
     
     """ partition join"""
-    # page_size = 4096
-    # H = 4
-    # delta = 400
-    # epsilon = 16
-    # queryfile = "books_100M_uint64_unique.1Mtable4.bin"
-    # dataset = "books_100M_uint64_unique"
-    # raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
-    # keys = raw
-    # queries = np.fromfile(f"{DATASETS_DIRECTORY}{queryfile}", dtype=np.uint64)
-    # lengths_file=f"{DATASETS_DIRECTORY}{queryfile}.par".replace(".bin","")
-    # bitmap_file=f"{DATASETS_DIRECTORY}{queryfile}.bitmap".replace(".bin","")
-    # join_partition(keys,queries,page_size,lengths_file=lengths_file,bitmap_file=bitmap_file,H=H,delta=delta,epsilon=epsilon)
+    page_size = 4096
+    H = 4
+    delta = 400
+    epsilon = 16
+    queryfile = "books_200M_uint64_unique.1Mtable.bin"
+    dataset = "books_200M_uint64_unique"
+    raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
+    keys = raw
+    queries = np.fromfile(f"{DATASETS_DIRECTORY}{queryfile}", dtype=np.uint64)
+    lengths_file=f"{DATASETS_DIRECTORY}{queryfile}.par".replace(".bin","")
+    bitmap_file=f"{DATASETS_DIRECTORY}{queryfile}.bitmap".replace(".bin","")
+    join_partition(keys,queries,page_size,lengths_file=lengths_file,bitmap_file=bitmap_file,H=H,delta=delta,epsilon=epsilon)
             
 if __name__ == '__main__':
     main()

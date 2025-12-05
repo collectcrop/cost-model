@@ -87,7 +87,8 @@ void worker_thread(falcon::FalconPGM<uint64_t, Epsilon, 4>* F,
 
         // 回收阶段：逐个 get，并写入该 query 的 latency
         for (auto& p : inflight) {
-            (void)p.fut.get();                             // 等待该 query 完成（可在此取 found 等信息）
+            auto fut = p.fut.get();                             // 等待该 query 完成（可在此取 found 等信息）
+            if (!fut.found) std::cout << "not found" << std::endl;
             // auto t1 = clock_t::now();
             // uint64_t ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - p.t0).count();
             // latency->set(p.qid, ns);                        // ← 关键：按全局下标写回该 query 的延迟
@@ -183,15 +184,15 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
 
 int main() {
     std::string dataset = "books";
-    std::string filename = "books_10M_uint64_unique";
-    std::string query_filename = "books_10M_uint64_unique.query.bin";
+    std::string filename = "books_200M_uint64_unique";
+    std::string query_filename = "books_200M_uint64_unique.query.bin";
     std::string file = DATASETS + filename;         
     std::string query_file = DATASETS + query_filename;
-    int n = 10000000;
+    int n = 200000000;
     std::vector<KeyType> data    = load_data(file, n);
     std::vector<KeyType> queries = load_queries(query_file);
 
-    const size_t MemoryBudget = 60ull * 1024 * 1024;
+    const size_t MemoryBudget = 50ull * 1024 * 1024;
     // const size_t MemoryBudget = 0;
 
     std::ofstream csv("falcon_multithread.csv", std::ios::out | std::ios::trunc);
@@ -199,56 +200,78 @@ int main() {
         std::cerr << "Failed to open CSV output\n";
         return 1;
     }
-    csv << "epsilon,avg_latency_ns,avg_walltime_s,avg_IOs,data_IO_time,hit_ratio\n";
+    csv << "epsilon,"<< "avg_latency_ns,"<< "total_wall_time_s,"<< "IOs,"<< "IO_time_s,"<< "mem_time_s,"
+    << "IO_fraction,"<< "mem_fraction,"<< "cache_hit_ratio\n";
     csv << std::fixed << std::setprecision(6);
     uint64_t threads = 1;
-    pgm::CachePolicy s = pgm::CachePolicy::LRU;
-    for (size_t epsilon : {2,4,6,8,10,12,14,16,18,20,24,32,48,64,128,256}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64,128
-        BenchmarkResult result;
-        const size_t M = MemoryBudget - 16*n/(2*epsilon);
-        switch (epsilon) {
-            case 2: result = benchmark_mt<2>(data, queries, file, s, threads, M); break;
-            case 4: result = benchmark_mt<4>(data, queries, file, s, threads, M); break;
-            case 6: result = benchmark_mt<6>(data, queries, file, s, threads, M); break;
-            case 8: result = benchmark_mt<8>(data, queries, file, s, threads, M); break;
-            case 9: result = benchmark_mt<9>(data, queries, file, s, threads, M); break;
-            case 10: result = benchmark_mt<10>(data, queries, file, s, threads, M); break;
-            case 11: result = benchmark_mt<11>(data, queries, file, s, threads, M); break;
-            case 12: result = benchmark_mt<12>(data, queries, file, s, threads, M); break;
-            case 13: result = benchmark_mt<13>(data, queries, file, s, threads, M); break;
-            case 14: result = benchmark_mt<14>(data, queries, file, s, threads, M); break;
-            case 15: result = benchmark_mt<15>(data, queries, file, s, threads, M); break;
-            case 16: result = benchmark_mt<16>(data, queries, file, s, threads, M); break;
-            case 17: result = benchmark_mt<17>(data, queries, file, s, threads, M); break;
-            case 18: result = benchmark_mt<18>(data, queries, file, s, threads, M); break;
-            case 19: result = benchmark_mt<19>(data, queries, file, s, threads, M); break;
-            case 20: result = benchmark_mt<20>(data, queries, file, s, threads, M); break;
-            case 21: result = benchmark_mt<21>(data, queries, file, s, threads, M); break;
-            case 22: result = benchmark_mt<22>(data, queries, file, s, threads, M); break;
-            case 23: result = benchmark_mt<23>(data, queries, file, s, threads, M); break;
-            case 24: result = benchmark_mt<24>(data, queries, file, s, threads, M); break;
-            case 25: result = benchmark_mt<25>(data, queries, file, s, threads, M); break;
-            case 26: result = benchmark_mt<26>(data, queries, file, s, threads, M); break;
-            case 28: result = benchmark_mt<28>(data, queries, file, s, threads, M); break;
-            case 30: result = benchmark_mt<30>(data, queries, file, s, threads, M); break;
-            case 32: result = benchmark_mt<32>(data, queries, file, s, threads, M); break;
-            case 40: result = benchmark_mt<40>(data, queries, file, s, threads, M); break;
-            case 48: result = benchmark_mt<48>(data, queries, file, s, threads, M); break;
-            case 56: result = benchmark_mt<56>(data, queries, file, s, threads, M); break;
-            case 64: result = benchmark_mt<64>(data, queries, file, s, threads, M); break;
-            case 128: result = benchmark_mt<128>(data, queries, file, s, threads, M); break;
-            case 256: result = benchmark_mt<256>(data, queries, file, s, threads, M); break;
+    size_t repeat = 5;
+    pgm::CachePolicy s = pgm::CachePolicy::NONE;
+    for (int i=0;i<repeat;i++){
+        for (size_t epsilon : {16}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64,128
+            BenchmarkResult result;
+            const size_t M = MemoryBudget - 16*n/(2*epsilon);
+            switch (epsilon) {
+                case 2: result = benchmark_mt<2>(data, queries, file, s, threads, M); break;
+                case 4: result = benchmark_mt<4>(data, queries, file, s, threads, M); break;
+                case 6: result = benchmark_mt<6>(data, queries, file, s, threads, M); break;
+                case 8: result = benchmark_mt<8>(data, queries, file, s, threads, M); break;
+                case 9: result = benchmark_mt<9>(data, queries, file, s, threads, M); break;
+                case 10: result = benchmark_mt<10>(data, queries, file, s, threads, M); break;
+                case 11: result = benchmark_mt<11>(data, queries, file, s, threads, M); break;
+                case 12: result = benchmark_mt<12>(data, queries, file, s, threads, M); break;
+                case 13: result = benchmark_mt<13>(data, queries, file, s, threads, M); break;
+                case 14: result = benchmark_mt<14>(data, queries, file, s, threads, M); break;
+                case 15: result = benchmark_mt<15>(data, queries, file, s, threads, M); break;
+                case 16: result = benchmark_mt<16>(data, queries, file, s, threads, M); break;
+                case 17: result = benchmark_mt<17>(data, queries, file, s, threads, M); break;
+                case 18: result = benchmark_mt<18>(data, queries, file, s, threads, M); break;
+                case 19: result = benchmark_mt<19>(data, queries, file, s, threads, M); break;
+                case 20: result = benchmark_mt<20>(data, queries, file, s, threads, M); break;
+                case 21: result = benchmark_mt<21>(data, queries, file, s, threads, M); break;
+                case 22: result = benchmark_mt<22>(data, queries, file, s, threads, M); break;
+                case 23: result = benchmark_mt<23>(data, queries, file, s, threads, M); break;
+                case 24: result = benchmark_mt<24>(data, queries, file, s, threads, M); break;
+                case 25: result = benchmark_mt<25>(data, queries, file, s, threads, M); break;
+                case 26: result = benchmark_mt<26>(data, queries, file, s, threads, M); break;
+                case 28: result = benchmark_mt<28>(data, queries, file, s, threads, M); break;
+                case 30: result = benchmark_mt<30>(data, queries, file, s, threads, M); break;
+                case 32: result = benchmark_mt<32>(data, queries, file, s, threads, M); break;
+                case 40: result = benchmark_mt<40>(data, queries, file, s, threads, M); break;
+                case 48: result = benchmark_mt<48>(data, queries, file, s, threads, M); break;
+                case 56: result = benchmark_mt<56>(data, queries, file, s, threads, M); break;
+                case 64: result = benchmark_mt<64>(data, queries, file, s, threads, M); break;
+                case 128: result = benchmark_mt<128>(data, queries, file, s, threads, M); break;
+                case 256: result = benchmark_mt<256>(data, queries, file, s, threads, M); break;
+            }
+            double total_time_s   = result.total_time / 1e9;
+            double io_time_s      = result.data_IO_time / 1e9;
+            double mem_time_s     = (result.total_time - result.data_IO_time) / 1e9;
+            double io_ratio       = double(result.data_IO_time) / double(result.total_time);
+            double mem_ratio      = 1.0 - io_ratio;
+            std::cout << "[Threads=" << threads << "] ε=" << result.epsilon
+                << ", avg query time=" << result.time_ns << " ns"
+                << ", hit ratio=" << result.hit_ratio
+                << ", total wall time=" << total_time_s << " s"
+                << ", IO time=" << io_time_s << " s"
+                << ", Mem(other) time=" << mem_time_s << " s"
+                << ", IO fraction=" << io_ratio
+                << ", Mem fraction=" << mem_ratio
+                << ", data IOs=" << result.data_IOs
+                << std::endl;
+            csv << epsilon << ","
+                << result.time_ns << ","
+                << total_time_s << ","
+                << result.data_IOs << ","
+                << io_time_s << ","
+                << mem_time_s << ","
+                << io_ratio << ","
+                << mem_ratio << ","
+                << result.hit_ratio
+                << "\n";
+            csv.flush();
         }
-        std::cout << "[Threads=" << threads << "] ε=" << result.epsilon
-                  << ", avg query time=" << result.time_ns << " ns"
-                  << ", hit ratio=" << result.hit_ratio
-                  << ", total wall time=" << result.total_time / 1e9 << " s"
-                  << ", data IOs=" << result.data_IOs 
-                  << ", data IO time=" << result.data_IO_time / 1e9 << " s" << std::endl;
-        csv << epsilon << "," << result.time_ns << "," << result.total_time / 1e9 << "," << result.data_IOs << ","
-        << result.data_IO_time << "," << result.hit_ratio << "\n";
-        csv.flush();
     }
+    
     csv.close();
     return 0;
 }

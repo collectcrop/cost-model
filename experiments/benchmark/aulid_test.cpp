@@ -14,7 +14,7 @@
 #include <iomanip>
 
 // include LIPPBTree header(s)
-#include "storage_management.h" 
+#include "aulid/storage_management.h" 
 #include "utils/utils.hpp"
 // or the actual header where LIPPBTree is defined
 #define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
@@ -32,6 +32,8 @@ struct RunStats {
     double wall_seconds = 0;
     double avg_block_per_lookup = 0; // average bc
     double avg_inblock_per_lookup = 0; // average ic
+    double mem_time_s = 0;  // 新增
+    double io_time_s  = 0; 
 };
 
 static u64 read_uint64_from_file(std::ifstream &ifs) {
@@ -93,8 +95,10 @@ static void worker_proc(
     std::atomic<u64>& total_latency_ns,
     std::atomic<u64>& total_blocks,   // sum of bc
     std::atomic<u64>& total_inblocks, // sum of ic
-    std::atomic<u64>& processed_count)
+    std::atomic<u64>& processed_count,
+    std::atomic<u64>& total_cpu_ns)
 {
+    timespec c0{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0);
     ValueType v;
     int not_found_count = 0;
     for (size_t i = 0; i < queries.size(); ++i) {
@@ -116,6 +120,10 @@ static void worker_proc(
         total_inblocks.fetch_add((u64)ic, std::memory_order_relaxed);
         processed_count.fetch_add(1, std::memory_order_relaxed);
     }
+    timespec c1{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
+    u64 cpu_ns = (u64)((c1.tv_sec - c0.tv_sec) * 1000000000ULL +
+                       (c1.tv_nsec - c0.tv_nsec));
+    total_cpu_ns.fetch_add(cpu_ns, std::memory_order_relaxed);
     if (not_found_count > 0) {
         std::cout << "Total not found in this thread: " << not_found_count << "/" << queries.size() << std::endl;
     }
@@ -146,6 +154,7 @@ static RunStats run_once(
     std::atomic<u64> total_blocks{0};
     std::atomic<u64> total_inblocks{0};
     std::atomic<u64> processed_count{0};
+    std::atomic<u64> total_cpu_ns{0}; 
 
     // launch threads
     std::vector<std::thread> ths;
@@ -153,7 +162,8 @@ static RunStats run_once(
     for (int t = 0; t < actual_threads; ++t) {
         ths.emplace_back(worker_proc, index, std::cref(parts[t]),
                          std::ref(total_latency_ns), std::ref(total_blocks),
-                         std::ref(total_inblocks), std::ref(processed_count));
+                         std::ref(total_inblocks), std::ref(processed_count),
+                         std::ref(total_cpu_ns));
     }
     for (auto &th : ths) th.join();
     auto wall1 = steady_clock::now();
@@ -163,11 +173,22 @@ static RunStats run_once(
     u64 lat_ns = total_latency_ns.load();
     u64 blocks = total_blocks.load();
     u64 inblocks = total_inblocks.load();
+    u64 cpu_ns    = total_cpu_ns.load();
 
     rs.wall_seconds = wall_s;
     rs.avg_latency_ns = proc ? (double)lat_ns / (double)proc : 0.0;
     rs.avg_block_per_lookup = proc ? (double)blocks / (double)proc : 0.0;
     rs.avg_inblock_per_lookup = proc ? (double)inblocks / (double)proc : 0.0;
+
+    double mem_time_s = (double)cpu_ns / 1e9;
+    double wall_ns    = wall_s * 1e9;
+    double io_ns      = wall_ns - (double)cpu_ns;
+    if (io_ns < 0) io_ns = 0;
+    double io_time_s  = io_ns / 1e9;
+
+    rs.mem_time_s = mem_time_s;
+    rs.io_time_s  = io_time_s;
+
     return rs;
 }
 
@@ -234,7 +255,7 @@ int main(int argc, char** argv) {
         std::cerr << "Failed to open CSV output: " << csv_name << "\n";
         return 1;
     }
-    csv << "baseline,threads,latency_ns,walltime_s,avg_IOs\n";
+    csv << "baseline,threads,latency_ns,walltime_s,avg_IOs,mem_time_s,io_time_s\n";
     csv << std::fixed << std::setprecision(6);
 
     // 9) 遍历线程数（1, 2, 4, ..., 2^max_exp）
@@ -254,10 +275,13 @@ int main(int argc, char** argv) {
                       << " avg_lat_ns=" << rs.avg_latency_ns
                       << " wall_s=" << rs.wall_seconds
                       << " avg_block=" << rs.avg_block_per_lookup
-                      << " avg_ic=" << rs.avg_inblock_per_lookup << "\n";
+                      << " avg_ic=" << rs.avg_inblock_per_lookup 
+                      << " mem_time_s=" << rs.mem_time_s 
+                      << " io_time_s=" << rs.io_time_s << "\n";;
 
             csv << "AULID," << threads << "," << rs.avg_latency_ns << "," << rs.wall_seconds
-                << "," << rs.avg_block_per_lookup << "\n";
+                << "," << rs.avg_block_per_lookup 
+                << "," << rs.mem_time_s << "," << rs.io_time_s << "\n";;
             csv.flush();
         }
     }

@@ -115,7 +115,7 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     pgm::PGMIndex<KeyType, Epsilon> index(data);
 
     // 2) 打开数据文件
-    int data_fd = ::open(filename.c_str(), O_RDONLY | O_DIRECT);
+    int data_fd = ::open(filename.c_str(), O_RDONLY|O_DIRECT);
     if (data_fd < 0) {
         perror("open data");
         std::exit(1);
@@ -215,7 +215,7 @@ int main(int argc, char **argv) {
     }
 
     // 4) 可选: memory budget (MB)
-    int mem_mb = 40;
+    int mem_mb = 256;
     if (argc >= 6) {
         mem_mb = std::atoi(argv[5]);
         if (mem_mb < 0) mem_mb = 0;
@@ -256,7 +256,7 @@ int main(int argc, char **argv) {
             if (threads == 0) threads = 1;
 
             auto result = benchmark_mt<16>(data, queries, file,
-                                           pgm::CachePolicy::NONE,
+                                           pgm::CachePolicy::LRU,
                                            static_cast<int>(threads),
                                            memory_budget_bytes);
 
