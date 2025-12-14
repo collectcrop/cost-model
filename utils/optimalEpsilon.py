@@ -10,6 +10,9 @@ from scipy.signal import fftconvolve
 alpha = 1
 DATASETS_DIRECTORY = "/mnt/home/zwshi/Datasets/SOSD/"
 LOG_DIRECTORY = "/mnt/home/zwshi/learned-index/cost-model/visualize/data/log/"
+# 一阶修正：有效缓存容量参数
+A_DEFAULT = 1.0   
+B_DEFAULT = 0.0  
 
 def build_uniform_box_kernel(epsilon):
     """离散均匀 box kernel 长度 L=2*epsilon+1,已归一化"""
@@ -99,7 +102,7 @@ def estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, i
             count[page] += 1
             
     for i in range(len(lo_pages)):
-        start_pos = max(0,lo_pos[i]-epsilon)
+        start_pos = max(0,lo_pos[i]-int(epsilon))
         for page in range(start_pos//ipp,lo_pages[i]):
             page_start = page * ipp
             page_end   = min((page + 1) * ipp - 1, N - 1)
@@ -272,7 +275,8 @@ def sample_ratio(C, N, qs, Q=0):
     m = int(np.sum(np.asarray(qs) > 0))
     if np.isinf(t_C):
         # All objects fit. Under the "first-time miss only" counting over a length-Q trace:
-        hit_rates = max(0, Q - m)/Q
+        # hit_rates = max(0, Q - m)/Q
+        hit_rates = 1
         return hit_rates
 
     # Otherwise, use standard Che hit rates)
@@ -286,6 +290,46 @@ def validate_ratio(ratio):
     else:
         h = ratio
     return h
+
+def model_cost_given_capacity(
+    epsilon,
+    n,
+    seg_size,
+    ipp,
+    ps,
+    C_pages,
+    type="sample",
+    data_file="",
+    query_file="",
+    s="all_in_once",
+):
+    """
+    在给定“页数容量 C_pages”时，调用现有 cost_function 得到模型 cost。
+    注意：这里强行构造一个 M 使得 CAM 里看到的 C 就是 C_pages。
+    """
+    # 对应索引大小
+    M_index = n * seg_size / (2 * epsilon)
+
+    # buffer 部分 = C_pages * ps
+    M_buffer = C_pages * ps
+
+    # 总内存 M_eff = index + buffer
+    M_eff = M_index + M_buffer
+
+    # 用原来的 cost_function 计算 cost（此时 cost_function 里算出的 C 就是 C_pages）
+    cost, h = cost_function(
+        epsilon,
+        n,
+        seg_size,
+        M_eff,
+        ipp,
+        ps,
+        type=type,
+        query_file=query_file,
+        data_file=data_file,
+        s=s,
+    )
+    return cost
 
 def join_cost_function(epsilon, n, seg_size, M, ipp, ps,
                        data_file="", join_file="", par_file="", bitmap_file="",
@@ -482,7 +526,8 @@ def join_cost_function(epsilon, n, seg_size, M, ipp, ps,
     }
     return avg_cost, detail
 
-def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_file=""):
+def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_file="",
+                        A=A_DEFAULT,B=B_DEFAULT):
     M_index = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
     C = M_buffer/ps
@@ -503,11 +548,12 @@ def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_fi
     buffer_ratio = sample_ratio(C, total_pages, q)
     # print(buffer_ratio)
     h = validate_ratio(buffer_ratio)
-    
+    h = A * h + B
     print((1-h)*RDAC.sum()/len(queries))
     return (1-h)*RDAC.sum()/len(queries), h
     
-def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="", data_file="",s="all_in_once"):
+def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="", data_file="",s="all_in_once",
+                  A=A_DEFAULT,B=B_DEFAULT):
     M_index = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
     C = M_buffer/ps
@@ -529,11 +575,13 @@ def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="
             buffer_ratio = zipf_ratio(C, total_pages,alpha)
         
         h = validate_ratio(buffer_ratio)
-
+        h = A * h + B
+        
     return (1 - h) * expected_DAC(epsilon, ipp, s), h
 
 
-def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file=""):
+def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file="",
+                                   A=A_DEFAULT,B=B_DEFAULT):
     data = f"{DATASETS_DIRECTORY}{data_file}"
     query = f"{DATASETS_DIRECTORY}{query_file}"
     eps_list = []
@@ -541,9 +589,9 @@ def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fi
     h_list = []
     time_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(least_eps, least_eps+1):
+    for eps in range(least_eps, 65, 2):
         t1 = time.time()
-        cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query, data)
+        cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query, data,A=A,B=B)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
@@ -563,7 +611,8 @@ def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fi
             f.write(f"{M>>20},{eps_list[i]},{cost_list[i]},{h_list[i]}\n")
     return eps_list, cost_list
 
-def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file="",s="one_by_one"):
+def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file="",s="all_in_once",
+                              A=A_DEFAULT,B=B_DEFAULT):
     data = f"{DATASETS_DIRECTORY}{data_file}"
     query = f"{DATASETS_DIRECTORY}{query_file}"
     eps_list = []
@@ -573,7 +622,7 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
     least_eps = math.ceil(n*seg_size/(2*M))
     for eps in range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2):
         t1 = time.time()
-        cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s)
+        cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s, A=A,B=B)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
@@ -635,13 +684,15 @@ def getOptimalEpsilon(ipp, seg_size, M, n, ps,type="uniform"):
 
 def main():
     M = 60*1024*1024
-    # data_file = f"books_70M_uint64_unique"
-    # query_file = f"books_70M_uint64_unique.query.bin"
-    # eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(7e7),ps=4096,type="sample",
-    #                                                data_file=data_file,query_file=query_file,s="all_in_once")
+    # data_file = f"books_10M_uint64_unique"
+    # query_file = f"books_10M_uint64_unique.query.bin"
+    # eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(1e7),ps=4096,type="sample",
+    #                                                data_file=data_file,query_file=query_file,s="all_in_once",
+    #                                                A=1.0,B=0)
     
-    data_file = f"fb_100M_uint64_unique"
-    query_file = f"range_query_4M_uu.bin"
-    getExpectedRangeCostPerEpsilon(n=int(1e8),seg_size=16,M=M,ipp=512,ps=4096,query_file=query_file,data_file=data_file)
+    data_file = f"fb_10M_uint64_unique"
+    query_file = f"range_query_fb_uu.bin"
+    getExpectedRangeCostPerEpsilon(n=int(1e7),seg_size=16,M=M,ipp=512,ps=4096,query_file=query_file,data_file=data_file,
+                                   A=1.0,B=0.00284)
 if __name__ == "__main__":
     main()

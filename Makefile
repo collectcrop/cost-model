@@ -11,11 +11,20 @@ falcon_wait_test:
 falcon_eps_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/parallel2.cpp $(CACHE_FACTORY) $(LDFLAGS)
 
+falcon_batch_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/parallel4.cpp $(CACHE_FACTORY) $(LDFLAGS)
+
+falcon_range_eps_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/range_parallel.cpp $(CACHE_FACTORY) $(LDFLAGS)
+	
 rmi_disk_test_books:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./include/rmi/books_rmi.cpp ./experiments/benchmark/rmi_disk_test_books.cpp $(LDFLAGS)
 
 pgm_disk_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/benchmark/pgm_disk_test.cpp $(LDFLAGS)
+
+pgm_mem_range_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/benchmark/pgm_mem_range_test.cpp $(LDFLAGS)
 
 aulid_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/benchmark/aulid_test.cpp $(LDFLAGS)

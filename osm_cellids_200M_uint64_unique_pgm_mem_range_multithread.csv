@@ -1,0 +1,12 @@
+baseline,threads,latency_ns,walltime_s,height,avg_IOs
+PGM-mem-range,1,1145.35,0.573108,4,0
+PGM-mem-range,2,927.051,0.232728,4,0
+PGM-mem-range,4,949.546,0.122364,4,0
+PGM-mem-range,8,931.034,0.0607134,4,0
+PGM-mem-range,16,918.19,0.0325574,4,0
+PGM-mem-range,32,1017.56,0.0196106,4,0
+PGM-mem-range,64,1208.76,0.0139865,4,0
+PGM-mem-range,128,1441.83,0.0127631,4,0
+PGM-mem-range,256,1144.1,0.0151083,4,0
+PGM-mem-range,512,1005.8,0.0244267,4,0
+PGM-mem-range,1024,1000.54,0.0424753,4,0

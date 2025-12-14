@@ -125,20 +125,20 @@ static BenchmarkResult bench_range(std::vector<KeyType> data,
 
 int main(int argc, char** argv) {
     // 数据与查询文件（按需修改）
-    const std::string dataset  = "fb_200M_uint64_unique";        // fb_10M_uint64_unique
+    const std::string dataset  = "fb_10M_uint64_unique";        // fb_10M_uint64_unique
     const std::string datafile = std::string(DATASETS) + dataset;
-    const std::string rangefile= std::string(DATASETS) + "fb_200M_uint64_unique.range.bin";     
+    const std::string rangefile= std::string(DATASETS) + "range_query_fb_uu.bin";     
     // 基础参数
     const int    N_KEYS     = 10000000;
     const size_t MEM_BUDGET = 60ull * 1024 * 1024; 
-    size_t repeat = 5;
+    size_t repeat = 3;
     // 读取数据与 range 查询
     auto data   = load_data(datafile, N_KEYS);
     auto ranges = load_ranges(rangefile);
     if (data.empty() || ranges.empty()) return 1;
 
     // 输出 CSV
-    std::ofstream csv("falcon_range_mt.csv", std::ios::out | std::ios::trunc);
+    std::ofstream csv("range_fb_10M_M60.csv", std::ios::out | std::ios::trunc);
     csv << "epsilon,threads,avg_latency_ns,wall_s,hit_ratio,avg_IOs,data_io_ns\n";
     csv << std::fixed << std::setprecision(6);
 
@@ -149,6 +149,10 @@ int main(int argc, char** argv) {
     for (int r = 0; r < repeat; ++r) {
         for (size_t eps : {2,4,8,12,16,20,24,32,48,64,128}) {           // 8,12,16,20,24,32,48,64,128
             size_t idx_est = 16ull * N_KEYS / (2*eps);
+            if (MEM_BUDGET <= idx_est) {
+                std::cout << "Skipping eps=" << eps << " due to insufficient memory budget\n";
+                continue;
+            }
             size_t buf_budget = (MEM_BUDGET > idx_est) ? (MEM_BUDGET - idx_est) : 0;
 
             BenchmarkResult r;

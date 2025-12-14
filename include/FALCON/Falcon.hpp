@@ -83,8 +83,10 @@ public:
     FalconStats stats() const {
         FalconStats s{};
         const auto& cs = cache_->stats();
-        s.cache_hits      = cs.hits.load(std::memory_order_relaxed);
-        s.cache_misses    = cs.misses.load(std::memory_order_relaxed);
+        // s.cache_hits      = cs.hits.load(std::memory_order_relaxed);
+        // s.cache_misses    = cs.misses.load(std::memory_order_relaxed);
+        s.cache_hits      = logical_hits_.load(std::memory_order_relaxed);
+        s.cache_misses    = logical_misses_.load(std::memory_order_relaxed);
         s.cache_evictions = cs.evictions.load(std::memory_order_relaxed);
         s.cache_puts      = cs.puts.load(std::memory_order_relaxed);
         s.physical_ios    = iostat_ios_.load(std::memory_order_relaxed);
@@ -105,6 +107,8 @@ private:
     long   max_wait_us_;
     std::atomic<bool> stop_{false};
     std::atomic<uint64_t> iostat_ios_{0},iostat_logical_ios_{0}, iostat_bytes_{0}, iostat_ns_{0}, cache_ns_{0};
+    std::atomic<uint64_t> logical_hits_{0};
+    std::atomic<uint64_t> logical_misses_{0};
     std::condition_variable cv_;
     std::mutex cv_mtx_;
     // MpmcQueue<Req> in_{1024*1024};
@@ -126,9 +130,12 @@ private:
             // 1) 汇总页需求
             std::vector<size_t> pages;
             pages.reserve(1024);
+            std::unordered_map<size_t, size_t> freq;
+            freq.reserve(1024);
             for (auto &r : batch) {
                 for (size_t p = r.page_lo; p <= r.page_hi; ++p) {
                     pages.push_back(p);
+                    ++freq[p];
                     // if (pages.size() >= max_pages_) break;
                 }
             }
@@ -145,11 +152,19 @@ private:
             std::vector<size_t> need_io;
             need_io.reserve(pages.size());
             for (auto pgidx : pages) {
+                size_t m = freq[pgidx];     // 这个页在本 batch 被访问了 m 次
                 pgm::Page ph;
                 if (cache_->get(pgidx, ph) && ph.data && ph.valid_len > 0) {
                     ready.emplace(pgidx, std::move(ph));
+                    logical_hits_.fetch_add(m, std::memory_order_relaxed);
                 } else {
                     need_io.push_back(pgidx);
+                    // 第一条访问触发 1 次 miss
+                    logical_misses_.fetch_add(1, std::memory_order_relaxed);
+                    // 剩下 (m-1) 次复用刚读入的页，可以视作命中
+                    if (m > 1) {
+                        logical_hits_.fetch_add(m - 1, std::memory_order_relaxed);
+                    }
                 }
             }
             
