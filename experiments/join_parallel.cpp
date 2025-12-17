@@ -26,7 +26,7 @@ struct ProbeSpec {
 struct Stats {
     double avg_latency_ns = 0.0;  // 每个小查询（point/range）平均墙钟延迟
     double hit_ratio      = 0.0;  // 数据页缓存命中率
-    uint64_t physical_ios = 0;    // 合并后物理 I/O 次数
+    uint64_t logical_ios = 0;   
     long long io_ns       = 0;    // I/O 花费时间（由 FALCON 统计）
     long long wall_ns     = 0;    // 端到端墙钟
     size_t height         = 0;    // PGM 高度
@@ -189,7 +189,7 @@ static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（�
     s.wall_ns       = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
     s.avg_latency_ns = double(s.wall_ns) / std::max<size_t>(1, queries.size());
     s.hit_ratio     = (st.cache_hits + st.cache_misses) ? double(st.cache_hits) / double(st.cache_hits + st.cache_misses) : 0.0;
-    s.physical_ios  = st.physical_ios;
+    s.logical_ios  = st.logical_ios;
     s.io_ns         = st.io_ns;
     s.height        = pgm_idx.height();
     s.matched_total = matched_total.load();
@@ -217,11 +217,11 @@ int main(int argc, char** argv) {
     std::string datafile_B = build_file;         
     int threads = 1;
     // size_t epsilon = 16;
-    size_t mem_mib = 10;
+    size_t mem_mib = 256;
     std::string policy_str = "LRU";
     std::string io_str = "uring";
     bool use_odirect = true;
-    int trials = 10;
+    int trials = 5;
     std::string csv_out = "books-200M-join.csv";
 
     // 加载 B 的 key（注意：需与 datafile_B 中记录顺序一致）
@@ -266,7 +266,7 @@ int main(int argc, char** argv) {
                       << "eps=" << EPS
                       << " thr=" << threads
                       << " hit=" << s.hit_ratio
-                      << " pIOs=" << s.physical_ios
+                      << " pIOs=" << s.logical_ios
                       << " io_ms=" << (s.io_ns/1e6)
                       << " wall_s=" << (s.wall_ns/1e9)
                       << " H=" << s.height
@@ -277,12 +277,12 @@ int main(int argc, char** argv) {
                 << EPS << "," 
                 << s.avg_latency_ns << "," 
                 << (s.wall_ns/1e9) << "," 
-                << s.physical_ios << "," 
+                << s.logical_ios << "," 
                 << s.io_ns << "\n";
             ofs.flush();
         }
     };
-    for (auto epsilon : {8, 12, 16, 20, 24, 32, 48, 64, 128}){
+    for (auto epsilon : {16}){      // 8, 12, 16, 20, 24, 32, 48, 64, 128
         switch (epsilon) {
             case 8:   bench_once(std::integral_constant<size_t,8>{}); break;
             case 12:  bench_once(std::integral_constant<size_t,12>{}); break;

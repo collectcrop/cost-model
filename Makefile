@@ -16,6 +16,15 @@ falcon_batch_test:
 
 falcon_range_eps_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/range_parallel.cpp $(CACHE_FACTORY) $(LDFLAGS)
+
+falcon_range_single_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/falcon_range_single.cpp $(CACHE_FACTORY) $(LDFLAGS)
+
+falcon_point_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/falcon_point.cpp $(CACHE_FACTORY) $(LDFLAGS)
+
+falcon_join_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/join_parallel.cpp $(CACHE_FACTORY) $(LDFLAGS)
 	
 rmi_disk_test_books:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./include/rmi/books_rmi.cpp ./experiments/benchmark/rmi_disk_test_books.cpp $(LDFLAGS)

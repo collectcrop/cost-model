@@ -191,4 +191,4 @@ def demo_fit_range():
     print("[RANGE] Fitted B:", B)
     
 if __name__ == "__main__":
-    demo_fit_range()
+    demo_fit()

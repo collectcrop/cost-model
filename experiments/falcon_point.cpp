@@ -1,4 +1,3 @@
-// test epsilon
 #include <sched.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -177,7 +176,7 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     result.total_time    = wall_clock_ns;    // ns
     result.data_IO_time  = st.io_ns;         // FALCON 收集的 I/O 时间累计（ns）
     result.height        = index.height();   // PGM 高度
-    result.data_IOs      = st.logical_ios;  
+    result.data_IOs      = st.physical_ios;  // logical_ios  
     ::close(data_fd);
     return result;
 }
@@ -210,17 +209,15 @@ int main(int argc, char **argv) {
         if (repeats <= 0) repeats = 1;
     }
 
-    // std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
-    // std::string query_fname  = dataset_basename + ".query.bin";   // e.g. books_200M_uint64_unique.query.bin
-    std::string filename     = dataset_basename;                  
-    std::string query_fname  = dataset_basename + ".1Mtable.bin";   
+    std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
+    std::string query_fname  = dataset_basename + ".1Mtable.bin";  
     std::string file         = DATASETS + filename;
     std::string query_file   = DATASETS + query_fname;
 
     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, num_keys);
     std::vector<KeyType> queries = load_queries_pgm_safe<KeyType>(query_file);
 
-    std::ofstream csv("falcon_multithread.csv", std::ios::out | std::ios::trunc);
+    std::ofstream csv("falcon_point.csv", std::ios::out | std::ios::trunc);
     if (!csv) {
         std::cerr << "Failed to open CSV output\n";
         return 1;
@@ -231,73 +228,42 @@ int main(int argc, char **argv) {
     uint64_t threads = 1;
     pgm::CachePolicy s = pgm::CachePolicy::LRU;
     for (int i=0;i<repeats;i++){
-        for (size_t epsilon : {2,4,6,10,12,14,16,18,20,24,32,48,64}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64,128
-            BenchmarkResult result;
-            if (MemoryBudget<16*num_keys/(2*epsilon)){
-                std::cout << "Memory budget too small for ε=" << epsilon << ", skipping.\n";
-                continue;
-            }
-            const size_t M = MemoryBudget - 16*num_keys/(2*epsilon);
-            switch (epsilon) {
-                case 2: result = benchmark_mt<2>(data, queries, file, s, threads, M); break;
-                case 4: result = benchmark_mt<4>(data, queries, file, s, threads, M); break;
-                case 6: result = benchmark_mt<6>(data, queries, file, s, threads, M); break;
-                case 8: result = benchmark_mt<8>(data, queries, file, s, threads, M); break;
-                case 9: result = benchmark_mt<9>(data, queries, file, s, threads, M); break;
-                case 10: result = benchmark_mt<10>(data, queries, file, s, threads, M); break;
-                case 11: result = benchmark_mt<11>(data, queries, file, s, threads, M); break;
-                case 12: result = benchmark_mt<12>(data, queries, file, s, threads, M); break;
-                case 13: result = benchmark_mt<13>(data, queries, file, s, threads, M); break;
-                case 14: result = benchmark_mt<14>(data, queries, file, s, threads, M); break;
-                case 15: result = benchmark_mt<15>(data, queries, file, s, threads, M); break;
-                case 16: result = benchmark_mt<16>(data, queries, file, s, threads, M); break;
-                case 17: result = benchmark_mt<17>(data, queries, file, s, threads, M); break;
-                case 18: result = benchmark_mt<18>(data, queries, file, s, threads, M); break;
-                case 19: result = benchmark_mt<19>(data, queries, file, s, threads, M); break;
-                case 20: result = benchmark_mt<20>(data, queries, file, s, threads, M); break;
-                case 21: result = benchmark_mt<21>(data, queries, file, s, threads, M); break;
-                case 22: result = benchmark_mt<22>(data, queries, file, s, threads, M); break;
-                case 23: result = benchmark_mt<23>(data, queries, file, s, threads, M); break;
-                case 24: result = benchmark_mt<24>(data, queries, file, s, threads, M); break;
-                case 25: result = benchmark_mt<25>(data, queries, file, s, threads, M); break;
-                case 26: result = benchmark_mt<26>(data, queries, file, s, threads, M); break;
-                case 28: result = benchmark_mt<28>(data, queries, file, s, threads, M); break;
-                case 30: result = benchmark_mt<30>(data, queries, file, s, threads, M); break;
-                case 32: result = benchmark_mt<32>(data, queries, file, s, threads, M); break;
-                case 40: result = benchmark_mt<40>(data, queries, file, s, threads, M); break;
-                case 48: result = benchmark_mt<48>(data, queries, file, s, threads, M); break;
-                case 56: result = benchmark_mt<56>(data, queries, file, s, threads, M); break;
-                case 64: result = benchmark_mt<64>(data, queries, file, s, threads, M); break;
-                case 128: result = benchmark_mt<128>(data, queries, file, s, threads, M); break;
-                case 256: result = benchmark_mt<256>(data, queries, file, s, threads, M); break;
-            }
-            double total_time_s   = result.total_time / 1e9;
-            double io_time_s      = result.data_IO_time / 1e9;
-            double mem_time_s     = (result.total_time - result.data_IO_time) / 1e9;
-            double io_ratio       = double(result.data_IO_time) / double(result.total_time);
-            double mem_ratio      = 1.0 - io_ratio;
-            std::cout << "[Threads=" << threads << "] ε=" << result.epsilon
-                << ", avg query time=" << result.time_ns << " ns"
-                << ", hit ratio=" << result.hit_ratio
-                << ", total wall time=" << total_time_s << " s"
-                << ", IO time=" << io_time_s << " s"
-                << ", Mem(other) time=" << mem_time_s << " s"
-                << ", IO fraction=" << io_ratio
-                << ", Mem fraction=" << mem_ratio
-                << ", data IOs=" << result.data_IOs
-                << std::endl;
-            csv << epsilon << ","
-                << result.time_ns << ","
-                << total_time_s << ","
-                << result.data_IOs << ","
-                << io_time_s << ","
-                << mem_time_s << ","
-                << io_ratio << ","
-                << mem_ratio << ","
-                << result.hit_ratio
-                << "\n";
-            csv.flush();
+        size_t epsilon = 16;
+        BenchmarkResult result;
+        if (MemoryBudget<16*num_keys/(2*epsilon)){
+            std::cout << "Memory budget too small for ε=" << epsilon << ", skipping.\n";
+            continue;
         }
+        const size_t M = MemoryBudget - 16*num_keys/(2*epsilon);
+        result = benchmark_mt<16>(data, queries, file, s, threads, M);
+        
+        double total_time_s   = result.total_time / 1e9;
+        double io_time_s      = result.data_IO_time / 1e9;
+        double mem_time_s     = (result.total_time - result.data_IO_time) / 1e9;
+        double io_ratio       = double(result.data_IO_time) / double(result.total_time);
+        double mem_ratio      = 1.0 - io_ratio;
+        std::cout << "[Threads=" << threads << "] ε=" << result.epsilon
+            << ", avg query time=" << result.time_ns << " ns"
+            << ", hit ratio=" << result.hit_ratio
+            << ", total wall time=" << total_time_s << " s"
+            << ", IO time=" << io_time_s << " s"
+            << ", Mem(other) time=" << mem_time_s << " s"
+            << ", IO fraction=" << io_ratio
+            << ", Mem fraction=" << mem_ratio
+            << ", data IOs=" << result.data_IOs
+            << std::endl;
+        csv << epsilon << ","
+            << result.time_ns << ","
+            << total_time_s << ","
+            << result.data_IOs << ","
+            << io_time_s << ","
+            << mem_time_s << ","
+            << io_ratio << ","
+            << mem_ratio << ","
+            << result.hit_ratio
+            << "\n";
+        csv.flush();
+        
     }
     
     csv.close();

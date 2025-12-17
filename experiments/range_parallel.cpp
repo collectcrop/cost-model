@@ -125,12 +125,12 @@ static BenchmarkResult bench_range(std::vector<KeyType> data,
 
 int main(int argc, char** argv) {
     // 数据与查询文件（按需修改）
-    const std::string dataset  = "fb_10M_uint64_unique";        // fb_10M_uint64_unique
+    const std::string dataset  = "books_200M_uint64_unique";       
     const std::string datafile = std::string(DATASETS) + dataset;
-    const std::string rangefile= std::string(DATASETS) + "range_query_fb_uu.bin";     
+    const std::string rangefile= std::string(DATASETS) + "books_200M_uint64_unique.range.bin";     
     // 基础参数
-    const int    N_KEYS     = 10000000;
-    const size_t MEM_BUDGET = 60ull * 1024 * 1024; 
+    const int    N_KEYS     = 200000000;
+    const size_t MEM_BUDGET = 256ull * 1024 * 1024; 
     size_t repeat = 3;
     // 读取数据与 range 查询
     auto data   = load_data(datafile, N_KEYS);
@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
     if (data.empty() || ranges.empty()) return 1;
 
     // 输出 CSV
-    std::ofstream csv("range_fb_10M_M60.csv", std::ios::out | std::ios::trunc);
+    std::ofstream csv("books_200MB_1Mquery_join.range.csv", std::ios::out | std::ios::trunc);
     csv << "epsilon,threads,avg_latency_ns,wall_s,hit_ratio,avg_IOs,data_io_ns\n";
     csv << std::fixed << std::setprecision(6);
 

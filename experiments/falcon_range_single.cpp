@@ -44,7 +44,7 @@ using timer = std::chrono::high_resolution_clock;
 
 // ---------- 单线程、批式 range 查询（适配 FALCON；带“探针键口径A”统计） ----------
 template <size_t Epsilon, size_t MemBudgetBytes>
-BenchmarkResult benchmark_falcon(std::vector<KeyType> data,
+BenchmarkResult benchmark_falcon(std::vector<KeyType> &data,
                                  const std::vector<RangeQuery>& ranges,
                                  const std::string& datafile_path,
                                  pgm::CachePolicy policy = pgm::CachePolicy::LRU,
@@ -158,7 +158,7 @@ BenchmarkResult benchmark_falcon(std::vector<KeyType> data,
     r.hit_ratio      = (st.cache_hits + st.cache_misses)
                         ? double(st.cache_hits) / double(st.cache_hits + st.cache_misses) : 0.0;
     r.height         = pgm_idx.height();
-    r.physical_ios   = st.physical_ios;
+    r.physical_ios   = st.logical_ios;
     r.matched_total  = matched_total;
 
     ::close(fd);
@@ -167,15 +167,16 @@ BenchmarkResult benchmark_falcon(std::vector<KeyType> data,
 
 int main() {
     std::string dataset  = "books";
-    std::string filename = "books_100M_uint64_unique";
+    std::string filename = "books_200M_uint64_unique";
     std::string file     = std::string(DATASETS) + filename;
 
     // 这里延续你的“单个大区间”做法：用 raw_queries 的首尾构成一个 range
-    std::string query_filename = "books_100M_uint64_unique.1Mtable.bin";
+    std::string query_filename = "books_200M_uint64_unique.1Mtable2.bin";
     std::string query_file     = std::string(DATASETS) + query_filename;
 
     std::vector<KeyType> data        = load_binary<KeyType>(file, false);
     std::vector<KeyType> raw_queries = load_binary<KeyType>(query_file, false);
+    raw_queries.resize(1000000);
 
     std::vector<RangeQuery> ranges;
     ranges.push_back({ raw_queries.front(), raw_queries.back() });
@@ -183,12 +184,12 @@ int main() {
     // 若未来改为多区间 + 对应探针切片，可填充 range_windows，使每个区间只对自身探针做统计
     std::vector<std::pair<size_t,size_t>> range_windows; // 此例为空（单 range 时自动用 [0, |raw_queries|)）
 
-    constexpr size_t MemoryBudget = 40ull * 1024 * 1024; // 40MiB
+    constexpr size_t MemoryBudget = 256ull * 1024 * 1024; // 40MiB
     const int trials = 10;
 
-    auto out_csv = dataset + "-100M-range.csv";
+    auto out_csv = dataset + "-200M-range.csv";
     std::ofstream ofs(out_csv, std::ios::out | std::ios::trunc);
-    ofs << "threads,avg_latency_ns,avg_walltime_s,avg_IOs,data_IO_time\n";
+    ofs << "epsilon,threads,avg_latency_ns,total_wall_time_s,avg_IOs,IO_time_s\n";
     ofs << std::fixed << std::setprecision(6);
 
     for (pgm::CachePolicy policy : {pgm::CachePolicy::LRU}) {
@@ -213,18 +214,18 @@ int main() {
                 std::cout << "ε=" << result.epsilon
                           << " | avg=" << result.time_ns << " ns"
                           << " | hit=" << result.hit_ratio
-                          << " | pIOs=" << result.physical_ios
-                          << " | io_ms=" << (result.data_IO_time/1e6)
+                          << " | IOs=" << result.physical_ios
+                          << " | io_s=" << (result.data_IO_time/1e9)
                           << " | wall_s=" << (result.total_time/1e9)
                           << " | H=" << result.height
                           << " | matched=" << result.matched_total
                           << std::endl;
 
-                ofs << 1 << ","
+                ofs << epsilon << "," << 1 << ","
                     << result.time_ns << ","
-                    << result.total_time << ","
+                    << (result.total_time/1e9) << ","
                     << result.physical_ios << ","
-                    << result.data_IO_time << "\n"; // ← 修复了原先漏逗号的问题
+                    << (result.data_IO_time/1e9) << "\n"; // ← 修复了原先漏逗号的问题
                 ofs.flush();
             }
         }
