@@ -203,26 +203,26 @@ int main(int argc, char **argv) {
     size_t MemoryBudget = static_cast<size_t>(mem_mb) * 1024ull * 1024ull;
     
     // 3) 可选: repeats
-    size_t repeats = 3;
+    size_t repeats = 10;
     if (argc >= 5) {
         repeats = std::atoi(argv[4]);
         if (repeats <= 0) repeats = 1;
     }
 
     std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
-    std::string query_fname  = dataset_basename + ".1Mtable.bin";  
+    std::string query_fname  = dataset_basename + ".1Mtable3.bin";  
     std::string file         = DATASETS + filename;
     std::string query_file   = DATASETS + query_fname;
 
     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, num_keys);
     std::vector<KeyType> queries = load_queries_pgm_safe<KeyType>(query_file);
 
-    std::ofstream csv("falcon_point.csv", std::ios::out | std::ios::trunc);
+    std::ofstream csv("books-200M-point.csv", std::ios::out | std::ios::trunc);
     if (!csv) {
         std::cerr << "Failed to open CSV output\n";
         return 1;
     }
-    csv << "epsilon,"<< "avg_latency_ns,"<< "total_wall_time_s,"<< "IOs,"<< "IO_time_s,"<< "mem_time_s,"
+    csv << "epsilon,"<< "avg_latency_ns,"<< "total_wall_time_s,"<< "avg_IOs,"<< "IO_time_s,"<< "mem_time_s,"
     << "IO_fraction,"<< "mem_fraction,"<< "cache_hit_ratio\n";
     csv << std::fixed << std::setprecision(6);
     uint64_t threads = 1;

@@ -211,9 +211,9 @@ static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（�
 int main(int argc, char** argv) {
     std::string build_file = std::string(DATASETS) + "books_200M_uint64_unique";         
     std::string probe_bin, probe_par, probe_bitmap; 
-    probe_bin = std::string(DATASETS) + "books_200M_uint64_unique.1Mtable.bin";
-    probe_par = std::string(DATASETS) + "books_200M_uint64_unique.1Mtable.par";
-    probe_bitmap = std::string(DATASETS) + "books_200M_uint64_unique.1Mtable.bitmap";
+    probe_bin = std::string(DATASETS) + "books_200M_uint64_unique.4Mtable2.bin";
+    probe_par = std::string(DATASETS) + "books_200M_uint64_unique.4Mtable2.par";
+    probe_bitmap = std::string(DATASETS) + "books_200M_uint64_unique.4Mtable2.bitmap";
     std::string datafile_B = build_file;         
     int threads = 1;
     // size_t epsilon = 16;
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
     std::string policy_str = "LRU";
     std::string io_str = "uring";
     bool use_odirect = true;
-    int trials = 5;
+    int trials = 3;
     std::string csv_out = "books-200M-join.csv";
 
     // 加载 B 的 key（注意：需与 datafile_B 中记录顺序一致）
@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
 
     // CSV
     std::ofstream ofs(csv_out, std::ios::out | std::ios::trunc);
-    ofs << "threads,epsilon,avg_latency_ns,avg_walltime_s,avg_IOs,data_IO_time\n";
+    ofs << "threads,epsilon,avg_latency_ns,total_wall_time_s,avg_IOs,IO_time_s,hit_rates\n";
     ofs << std::fixed << std::setprecision(6);
 
     auto bench_once = [&](auto const_tag){
@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
                       << " thr=" << threads
                       << " hit=" << s.hit_ratio
                       << " pIOs=" << s.logical_ios
-                      << " io_ms=" << (s.io_ns/1e6)
+                      << " io_s=" << (s.io_ns/1e9)
                       << " wall_s=" << (s.wall_ns/1e9)
                       << " H=" << s.height
                       << " matched=" << s.matched_total
@@ -278,15 +278,22 @@ int main(int argc, char** argv) {
                 << s.avg_latency_ns << "," 
                 << (s.wall_ns/1e9) << "," 
                 << s.logical_ios << "," 
-                << s.io_ns << "\n";
+                << (s.io_ns/1e9) << ","
+                << s.hit_ratio << "\n";
             ofs.flush();
         }
     };
-    for (auto epsilon : {16}){      // 8, 12, 16, 20, 24, 32, 48, 64, 128
+    for (auto epsilon : {2,4,6,10,12,14,16,18,20,24,32,48,64}){      // 8, 12, 16, 20, 24, 32, 48, 64, 128
         switch (epsilon) {
+            case 2:   bench_once(std::integral_constant<size_t,2>{}); break;
+            case 4:   bench_once(std::integral_constant<size_t,4>{}); break;
+            case 6:   bench_once(std::integral_constant<size_t,6>{}); break;
             case 8:   bench_once(std::integral_constant<size_t,8>{}); break;
+            case 10:  bench_once(std::integral_constant<size_t,10>{}); break;
             case 12:  bench_once(std::integral_constant<size_t,12>{}); break;
+            case 14:  bench_once(std::integral_constant<size_t,14>{}); break;
             case 16:  bench_once(std::integral_constant<size_t,16>{}); break;
+            case 18:  bench_once(std::integral_constant<size_t,18>{}); break;
             case 20:  bench_once(std::integral_constant<size_t,20>{}); break;
             case 24:  bench_once(std::integral_constant<size_t,24>{}); break;
             case 32:  bench_once(std::integral_constant<size_t,32>{}); break;

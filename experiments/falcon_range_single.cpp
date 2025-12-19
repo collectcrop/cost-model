@@ -171,7 +171,7 @@ int main() {
     std::string file     = std::string(DATASETS) + filename;
 
     // 这里延续你的“单个大区间”做法：用 raw_queries 的首尾构成一个 range
-    std::string query_filename = "books_200M_uint64_unique.1Mtable2.bin";
+    std::string query_filename = "books_200M_uint64_unique.1Mtable3.bin";
     std::string query_file     = std::string(DATASETS) + query_filename;
 
     std::vector<KeyType> data        = load_binary<KeyType>(file, false);

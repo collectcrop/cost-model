@@ -560,20 +560,20 @@ def main():
     #     print(f"[+] save range queries to {out_path} successfully!")
     
     """ join """
-    # sizeList = [2e8]
-    # datasets = ["books"]
-    # num_queries = 1000000
-    # for dataset in datasets:
-    #     for size in sizeList:
-    #         print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
-    #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
-    #         keys = raw
-    #         print(f"[*] Loaded {len(keys)} keys.")
-    #         # queries = sample_unique_mixture(keys,num_queries)
-    #         queries = sample_unique_mixture(keys,num_queries,hotpot_ratio=0,zipf_ratio=0)
-    #         print(f"[*] Loaded {len(queries)} queries.")
-    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable2.bin")
-    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable2.bin successfully!")
+    sizeList = [2e8]
+    datasets = ["books"]
+    num_queries = 4000000
+    for dataset in datasets:
+        for size in sizeList:
+            print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
+            raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
+            keys = raw
+            print(f"[*] Loaded {len(keys)} keys.")
+            # queries = sample_unique_mixture(keys,num_queries)
+            queries = sample_unique_mixture(keys,num_queries,hotpot_ratio=0,zipf_ratio=1,oversample=100)
+            print(f"[*] Loaded {len(queries)} queries.")
+            queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable2.bin")
+            print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable2.bin successfully!")
     
     # datasets = ["books"]
     # num_queries = 100000
@@ -591,7 +591,7 @@ def main():
     """ partition join"""
     page_size = 4096
     epsilon = 16
-    queryfile = "books_200M_uint64_unique.1Mtable2.bin"
+    queryfile = "books_200M_uint64_unique.4Mtable2.bin"
     dataset = "books_200M_uint64_unique"
     raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
     keys = raw
