@@ -14,6 +14,9 @@ falcon_eps_test:
 falcon_batch_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/parallel4.cpp $(CACHE_FACTORY) $(LDFLAGS)
 
+falcon_worker_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/parallel6.cpp $(CACHE_FACTORY) $(LDFLAGS)
+
 falcon_range_eps_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/range_parallel.cpp $(CACHE_FACTORY) $(LDFLAGS)
 
@@ -38,6 +41,13 @@ pgm_mem_range_test:
 aulid_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/benchmark/aulid_test.cpp $(LDFLAGS)
 
+cache_policy_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/cache_policy_bench.cpp $(LDFLAGS)
+
+page_fetch_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/page_fetch_strategy.cpp $(LDFLAGS)
+
 bplustree_test:
 # 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./include/bplustree/stx_disk_kv.cpp ./experiments/benchmark/bplustree_test.cpp $(LDFLAGS)
 	g++ -O3 -g -pthread ./include/bplustree/stx_disk_kv.cpp -I ./include ./experiments/benchmark/bplustree_test.cpp -o test $(LDFLAGS)
+

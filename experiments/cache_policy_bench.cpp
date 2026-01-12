@@ -27,7 +27,6 @@ using KeyType = uint64_t;
 using timer   = std::chrono::high_resolution_clock;
 using ns      = std::chrono::nanoseconds;
 
-// 根据你的习惯改
 #define DATASETS  "/mnt/home/zwshi/Datasets/SOSD/"
 #define DATA_FILE "osm_cellids_200M_uint64_unique"   // 纯 key 的二进制文件
 // #define QUERY_FILE "osm_cellids_200M_uint64_unique.query.bin"
@@ -265,7 +264,7 @@ int main() {
     std::cout << "Unique pages touched by queries = " << uniq_pages << std::endl;
 
     // 6) 缓存容量 sweep（MiB）
-    vector<double> cache_sizes_b = {1e5, 1e6, 32e6, 512e6, 4096e6}; // 1MiB, 32MiB, 512MiB, 4GiB
+    vector<double> cache_sizes_b = {1e5, 1e6, 32e6, 512e6, 4096e6}; // 100KiB, 1MiB, 32MiB, 512MiB, 4GiB
 
     ofstream result_file;
     if (first_run) {

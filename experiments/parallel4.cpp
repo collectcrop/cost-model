@@ -197,20 +197,20 @@ int main() {
     std::vector<KeyType> data    = load_data(file, n);
     std::vector<KeyType> queries = load_queries(query_file);
 
-    const size_t MemoryBudget = 20ull * 1024 * 1024;
+    const size_t MemoryBudget = 50ull * 1024 * 1024;
     // const size_t MemoryBudget = 0;
 
-    std::ofstream csv("20M_batch_falcon.csv", std::ios::out | std::ios::trunc);
+    std::ofstream csv("0M_batch_falcon.csv", std::ios::out | std::ios::trunc);
     if (!csv) {
         std::cerr << "Failed to open CSV output\n";
         return 1;
     }
     csv << "batch,avg_latency_ns,p50_ns,p95_ns,p99_ns,avg_walltime_s,avg_IOs,data_IO_time,hit_ratio\n";
     csv << std::fixed << std::setprecision(6);
-    uint64_t threads = 1;
+    uint64_t threads = 16;
     size_t epsilon = 16;
     size_t repeats = 3;
-    pgm::CachePolicy s = pgm::CachePolicy::LRU;
+    pgm::CachePolicy s = pgm::CachePolicy::NONE;
     for (size_t i = 0; i < repeats; i++ ){
         for (size_t batch : {1,2,4,8,16,32,64,128,256,512,1024,2048,4096}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64,128
             BenchmarkResult result;

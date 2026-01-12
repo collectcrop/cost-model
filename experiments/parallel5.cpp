@@ -212,7 +212,7 @@ int main() {
     size_t epsilon = 16;
     pgm::CachePolicy s = pgm::CachePolicy::LRU;
     for (size_t i=0;i<repeat;i++){
-        for (size_t wait_us : {1,10,50,100,1000}) {     
+        for (size_t wait_us : {1,10,50,100,1000,10000}) {     
             BenchmarkResult result;
             const size_t M = MemoryBudget - 16*n/(2*epsilon);
             

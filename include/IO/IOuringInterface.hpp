@@ -30,7 +30,7 @@ public:
         // p.flags |= IORING_SETUP_SQPOLL;     // 开启内核SQ轮询
         // p.sq_thread_idle = 2000;            // 可配：空闲自旋ms
         // int ret = io_uring_queue_init_params(queue_depth, &ring, &p);
-if (ret < 0) { /* 回退或报错 */ }
+        // if (ret < 0) { /* 回退或报错 */ }
     }
 
     virtual ~IoUringInterface() {
