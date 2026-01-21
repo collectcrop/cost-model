@@ -6,7 +6,7 @@
 #include <thread>
 #include <algorithm>
 
-namespace pgm {
+namespace falcon {
 
 static inline size_t round_up_pow2(size_t x) {
     if (x == 0) return 1;
@@ -23,7 +23,7 @@ MakeShardedCache(CachePolicy policy,
                  size_t page_size,
                  size_t shards)
 {
-    if (page_size == 0) page_size = pgm::PAGE_SIZE;
+    if (page_size == 0) page_size = falcon::PAGE_SIZE;
     size_t cap_pages = memory_budget_bytes / page_size;
 
     // if (shards == 0) {

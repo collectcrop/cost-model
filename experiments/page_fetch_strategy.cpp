@@ -21,10 +21,6 @@
 #include "IO/IOuringInterface.hpp"
 #include "pgm/pgm_index.hpp"
 
-#ifndef EPSILON
-#define EPSILON 16
-#endif
-
 using Key = uint64_t;
 using Clock = std::chrono::high_resolution_clock;
 
@@ -44,6 +40,10 @@ static inline void accumulate(BenchStat& b, const pgm::IOResult& io) {
 }
 enum class Strategy { AllAtOnce, OneByOne };
 enum class IOType { PSYNC, LIBAIO, URING };
+
+#ifndef EPSILON
+#define EPSILON 64
+#endif
 
 struct Args {
     std::string data_path;
@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
         agg.bytes += s.bytes;
         agg.ns += s.ns;
     }
-
+    std::cout << "agg queries:" << agg.queries << std::endl;
     double sec = (double)wall_ns / 1e9;
     double qps = agg.queries / sec;
 

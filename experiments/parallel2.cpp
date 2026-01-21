@@ -28,7 +28,7 @@
 
 using KeyType = uint64_t;
 #define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
+// #define DATASETS "/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/"
 
 struct Record {
     uint64_t key;
@@ -108,7 +108,7 @@ template <size_t Epsilon>
 BenchmarkResult benchmark_mt(std::vector<KeyType> data,
                              std::vector<KeyType> queries,
                              std::string filename,
-                             pgm::CachePolicy s,
+                             falcon::CachePolicy s,
                              int num_threads,
                              size_t M,
                              size_t batch_size = 128) {
@@ -120,11 +120,11 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     if (data_fd < 0) { perror("open data"); std::exit(1); }
 
     // 3) 策略映射
-    pgm::CachePolicy policy = pgm::CachePolicy::NONE;
+    falcon::CachePolicy policy = falcon::CachePolicy::NONE;
     switch (s) {
-        case pgm::CachePolicy::LRU:  policy = pgm::CachePolicy::LRU;  break;
-        case pgm::CachePolicy::FIFO: policy = pgm::CachePolicy::FIFO; break;
-        case pgm::CachePolicy::LFU:  policy = pgm::CachePolicy::LFU;  break;
+        case falcon::CachePolicy::LRU:  policy = falcon::CachePolicy::LRU;  break;
+        case falcon::CachePolicy::FIFO: policy = falcon::CachePolicy::FIFO; break;
+        case falcon::CachePolicy::LFU:  policy = falcon::CachePolicy::LFU;  break;
     }
 
     // 4) 构建 FALCON 引擎
@@ -133,7 +133,7 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     falcon::FalconPGM<uint64_t, Epsilon, /*EpsRec*/ 4> F(
         index,
         data_fd,
-        pgm::IO_URING,
+        falcon::IO_URING,
         /*memory_budget_bytes=*/ M,
         /*cache_policy=*/ policy,
         /*cache_shards=*/ 1,                
@@ -191,11 +191,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // 1) 必选参数
+    // 1) database name
     std::string dataset_basename = argv[1]; 
     uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
 
-    // 2) 可选: memory budget (MB)
+    // 2) optional: memory budget (MB)
     int mem_mb = 256;
     if (argc >= 4) {
         mem_mb = std::atoi(argv[3]);
@@ -203,7 +203,7 @@ int main(int argc, char **argv) {
     }
     size_t MemoryBudget = static_cast<size_t>(mem_mb) * 1024ull * 1024ull;
     
-    // 3) 可选: repeats
+    // 3) optional: repeats
     size_t repeats = 3;
     if (argc >= 5) {
         repeats = std::atoi(argv[4]);
@@ -211,14 +211,26 @@ int main(int argc, char **argv) {
     }
 
     // std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
-    // std::string query_fname  = dataset_basename + ".query.bin";   // e.g. books_200M_uint64_unique.query.bin
+    std::string query_fname  = dataset_basename + ".query.bin";   // e.g. books_200M_uint64_unique.query.bin
     std::string filename     = dataset_basename;                  
-    std::string query_fname  = dataset_basename + ".1Mtable.bin";   
-    std::string file         = DATASETS + filename;
-    std::string query_file   = DATASETS + query_fname;
+    // std::string query_fname  = dataset_basename + ".1Mtable.bin";   
+    std::string file         = falcon::DATASETS + filename;
+    std::string query_file   = falcon::DATASETS + query_fname;
 
     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, num_keys);
-    std::vector<KeyType> queries = load_queries_pgm_safe<KeyType>(query_file);
+    std::vector<KeyType> all_queries = load_queries_pgm_safe<KeyType>(query_file);
+
+    size_t N = all_queries.size();
+    size_t eval_begin = static_cast<size_t>(0.3 * N);  // 30% profiling，70% evaluation
+
+    std::vector<KeyType> queries(
+        all_queries.begin() + eval_begin,
+        all_queries.end()
+    );
+    // std::vector<KeyType> queries(
+    //     all_queries.begin(),
+    //     all_queries.begin() + eval_begin
+    // );
 
     std::ofstream csv("falcon_multithread.csv", std::ios::out | std::ios::trunc);
     if (!csv) {
@@ -229,9 +241,9 @@ int main(int argc, char **argv) {
     << "IO_fraction,"<< "mem_fraction,"<< "cache_hit_ratio\n";
     csv << std::fixed << std::setprecision(6);
     uint64_t threads = 1;
-    pgm::CachePolicy s = pgm::CachePolicy::LRU;
+    falcon::CachePolicy s = falcon::CachePolicy::LRU;
     for (int i=0;i<repeats;i++){
-        for (size_t epsilon : {2,4,6,10,12,14,16,18,20,24,32,48,64}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64,128
+        for (size_t epsilon : {1024,4096}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64
             BenchmarkResult result;
             if (MemoryBudget<16*num_keys/(2*epsilon)){
                 std::cout << "Memory budget too small for ε=" << epsilon << ", skipping.\n";
@@ -270,6 +282,8 @@ int main(int argc, char **argv) {
                 case 64: result = benchmark_mt<64>(data, queries, file, s, threads, M); break;
                 case 128: result = benchmark_mt<128>(data, queries, file, s, threads, M); break;
                 case 256: result = benchmark_mt<256>(data, queries, file, s, threads, M); break;
+                case 1024: result = benchmark_mt<1024>(data, queries, file, s, threads, M); break;
+                case 4096: result = benchmark_mt<4096>(data, queries, file, s, threads, M); break;
             }
             double total_time_s   = result.total_time / 1e9;
             double io_time_s      = result.data_IO_time / 1e9;

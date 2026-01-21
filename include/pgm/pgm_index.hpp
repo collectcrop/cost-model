@@ -209,8 +209,8 @@ public:
         size_t pos = std::min<size_t>((*it)(k), std::next(it)->intercept);
         size_t lo  = PGM_SUB_EPS(pos, Epsilon);
         size_t hi  = PGM_ADD_EPS(pos, Epsilon, n);
-        size_t page_lo = lo / pgm::ITEM_PER_PAGE;
-        size_t page_hi = hi / pgm::ITEM_PER_PAGE;
+        size_t page_lo = lo / falcon::ITEM_PER_PAGE;
+        size_t page_hi = hi / falcon::ITEM_PER_PAGE;
         if (page_hi < page_lo) page_hi = page_lo;
         return { page_lo, page_hi };
     }

@@ -2,11 +2,16 @@
 set -euo pipefail
 
 BIN="./test"
-DATA="/mnt/home/zwshi/Datasets/SOSD/books_200M_uint64_unique"
-QUERIES="/mnt/home/zwshi/Datasets/SOSD/books_200M_uint64_unique.query.bin"
+DATA="/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/books_200M_uint64_unique"
+QUERIES="/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/books_200M_uint64_unique.1Kquery.bin"
+OUTDIR="log"
+mkdir -p "${OUTDIR}"
+LOGFILE="${OUTDIR}/qps_raw_$(date +%Y%m%d_%H%M%S).log"
+echo "Writing raw outputs to: ${LOGFILE}" | tee -a "${LOGFILE}"
+echo | tee -a "${LOGFILE}"
 
 STRATEGIES=("all" "one") #"one"
-THREADS=(64)    # 1 4 16
+THREADS=(1 4 16 64 256)    # 1 4 16
 REPEAT=10
 
 # Extract qps from stdout. Expected token: qps=<number>
@@ -66,14 +71,14 @@ for strat in "${STRATEGIES[@]}"; do
       echo "${qps}" >> "${tmpfile}"
     done
 
-    echo
-    echo "[qps samples]"
-    nl -ba "${tmpfile}"
+    echo | tee -a "${LOGFILE}"
+    echo "[qps samples]" | tee -a "${LOGFILE}"
+    nl -ba "${tmpfile}" | tee -a "${LOGFILE}"
 
-    echo
-    echo "[summary] strategy=${strat}, threads=${th}, repeats=${REPEAT}"
-    stats < "${tmpfile}"
-    echo
+    echo | tee -a "${LOGFILE}"
+    echo "[summary] strategy=${strat}, threads=${th}, repeats=${REPEAT}" | tee -a "${LOGFILE}"
+    stats < "${tmpfile}" | tee -a "${LOGFILE}"
+    echo | tee -a "${LOGFILE}"
 
     rm -f "${tmpfile}"
     trap - EXIT

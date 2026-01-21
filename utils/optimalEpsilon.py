@@ -2,18 +2,15 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 import time
-import os
+import os, sys
 from scipy.optimize import brentq  # 用于解非线性方程
 from scipy.special import zeta     # Riemann zeta 函数
 from collections import Counter
 from scipy.signal import fftconvolve
 
 alpha = 1
-DATASETS_DIRECTORY = "/mnt/home/zwshi/Datasets/SOSD/"
+DATASETS_DIRECTORY = "/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/"
 LOG_DIRECTORY = "/mnt/home/zwshi/learned-index/cost-model/visualize/data/log/"
-# 一阶修正：有效缓存容量参数
-A_DEFAULT = 1.0   
-B_DEFAULT = 0.0  
 
 def build_uniform_box_kernel(epsilon):
     """离散均匀 box kernel 长度 L=2*epsilon+1,已归一化"""
@@ -48,6 +45,8 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
     else:
         queries = np.asarray(query_file, dtype=np.uint64)
 
+    # use first 30% queries for profiling
+    queries = queries[:int(len(queries) * 0.3)]
     Q = len(queries)
 
     assert isinstance(data, np.ndarray)
@@ -74,7 +73,7 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
     # 注：每个 query 平均导致 L=2ε+1 个位置被访问 -> sum(T) ~= Q * L 。
     # 如果需要保证 sum == Q*L, 检查 kernel sum == 1, H sum == Q -> sum(T) == Q
 
-    # 4) 按页聚合
+    # 4) page aggregation
     num_pages = math.ceil(N / ipp)
     pad_len = num_pages * ipp - N
     if pad_len > 0:
@@ -84,33 +83,6 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
     page_counts = T_padded.reshape(num_pages, ipp).sum(axis=1)  # expected counts per page
 
     return page_counts, T, Q
-
-def estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, ipp, use_fft=False):
-    # map lo->positions then to pages
-    N = len(data)
-    lo_pos = np.searchsorted(data, lo_keys, side='right') - 1
-    hi_pos = np.searchsorted(data, hi_keys, side='right') - 1
-    lo_pos = np.clip(lo_pos, 0, N-1)
-    hi_pos = np.clip(hi_pos, 0, N-1)
-    # page indices
-    lo_pages = lo_pos // ipp
-    hi_pages = hi_pos // ipp
-    num_pages = math.ceil(N / ipp)
-    count = Counter()
-
-    for i in range(len(lo_pages)):
-        for page in range(lo_pages[i],hi_pages[i]+1):
-            count[page] += 1
-            
-    for i in range(len(lo_pages)):
-        start_pos = max(0,lo_pos[i]-int(epsilon))
-        for page in range(start_pos//ipp,lo_pages[i]):
-            page_start = page * ipp
-            page_end   = min((page + 1) * ipp - 1, N - 1)
-            count[page] += (page_end - max(page_start,start_pos))/(2*epsilon+1)
-    
-    return count                  #, k_pages, offset_min
-
 
 def extract_data_gap_distribution(data_file):
     """
@@ -126,39 +98,39 @@ def extract_data_gap_distribution(data_file):
     sigma = np.std(gaps)
     return miu, sigma
 
-def extract_query_distribution(filename,data,epsilon,ipp):
-    """
-    input:
-        filename: query filename (binary file with uint64 keys)
-    output:
-        probs: np.array, where probs[i] = q(i), i.e., probability of the i-th most popular key
-    """
-    queries = np.fromfile(filename, dtype=np.uint64)
-    pos = np.searchsorted(data, queries, side='right') - 1
-    total_keys = len(data)
-    # num_pages = int(np.ceil(total_keys / ipp))
-    count = Counter()
-    for p in pos:
-        start_pos = max(0, p - epsilon)
-        end_pos   = min(total_keys - 1, p + epsilon)
-        total_len = end_pos - start_pos + 1
-        start = start_pos//ipp
-        end = end_pos//ipp
-        for page in range(start,end+1):
-            count[page] += 1
-            # page_start = page * ipp
-            # page_end   = min((page + 1) * ipp - 1, total_keys - 1)
-            # overlap    = max(0, min(end_pos, page_end) - max(start_pos, page_start) + 1)
-            # if overlap > 0:
-            #     # add weight 1
-            #     count[page] += overlap / total_len
-    # print(count)        
-    # count = Counter(queries)
-    # total = len(queries)
-    total = sum(count.values())
-    sorted_freqs = sorted(count.values(), reverse=True)
-    probs = np.array([f / total for f in sorted_freqs], dtype=np.float64)
-    return probs
+# def extract_query_distribution(filename,data,epsilon,ipp):
+#     """
+#     input:
+#         filename: query filename (binary file with uint64 keys)
+#     output:
+#         probs: np.array, where probs[i] = q(i), i.e., probability of the i-th most popular key
+#     """
+#     queries = np.fromfile(filename, dtype=np.uint64)
+#     pos = np.searchsorted(data, queries, side='right') - 1
+#     total_keys = len(data)
+#     # num_pages = int(np.ceil(total_keys / ipp))
+#     count = Counter()
+#     for p in pos:
+#         start_pos = max(0, p - epsilon)
+#         end_pos   = min(total_keys - 1, p + epsilon)
+#         total_len = end_pos - start_pos + 1
+#         start = start_pos//ipp
+#         end = end_pos//ipp
+#         for page in range(start,end+1):
+#             count[page] += 1
+#             # page_start = page * ipp
+#             # page_end   = min((page + 1) * ipp - 1, total_keys - 1)
+#             # overlap    = max(0, min(end_pos, page_end) - max(start_pos, page_start) + 1)
+#             # if overlap > 0:
+#             #     # add weight 1
+#             #     count[page] += overlap / total_len
+#     # print(count)        
+#     # count = Counter(queries)
+#     # total = len(queries)
+#     total = sum(count.values())
+#     sorted_freqs = sorted(count.values(), reverse=True)
+#     probs = np.array([f / total for f in sorted_freqs], dtype=np.float64)
+#     return probs
 
 def zipf_popularity(N, alpha):
     norm_const = sum(1 / (i ** alpha) for i in range(1, N + 1))
@@ -332,157 +304,6 @@ def model_cost_given_capacity(
     )
     return cost
 
-
-# def join_cost_function(
-#     epsilon, n, seg_size, M, ipp, ps,
-#     data_file="", join_file="", par_file="", bitmap_file="",
-#     s_point="all_in_once",          # 与 cost_function 一致：expected_DAC(eps, ipp, s)
-#     A=A_DEFAULT, B=B_DEFAULT,
-#     type="sample",                 # 目前 join 基本都应走 sample
-#     return_detail=False,
-# ):
-#     # -----------------------
-#     # 0) 读取数据与 join keys
-#     # -----------------------
-#     data = np.fromfile(data_file, dtype=np.uint64)[1:]
-#     join_keys = np.fromfile(join_file, dtype=np.uint64)
-#     Q_total = int(len(join_keys))
-#     if Q_total == 0:
-#         return (0.0, 0.0, {"Q_total": 0}) if return_detail else (0.0, 0.0)
-
-#     # join_partition 期望 join_keys 单调；不单调则排序（保持安全）
-#     if np.any(join_keys[1:] < join_keys[:-1]):
-#         join_keys = np.sort(join_keys)
-
-#     # -----------------------
-#     # 1) 读取 partition 信息
-#     # -----------------------
-#     if (not os.path.exists(par_file)) or (not os.path.exists(bitmap_file)):
-#         raise FileNotFoundError(
-#             f"partition files not found: {par_file} / {bitmap_file}. "
-#             f"Please run generate_query.join_partition(...) for this epsilon first."
-#         )
-
-#     lengths = np.fromfile(par_file, dtype=np.int64)
-#     bitmap  = np.fromfile(bitmap_file, dtype=np.int8)
-
-#     if lengths.size != bitmap.size:
-#         raise ValueError(f"lengths.size({lengths.size}) != bitmap.size({bitmap.size})")
-
-#     if int(lengths.sum()) != Q_total:
-#         raise ValueError(f"sum(lengths)={int(lengths.sum())} != Q_total={Q_total}")
-
-#     # -----------------------
-#     # 2) 切分为 point_keys 与 range_pairs
-#     # -----------------------
-#     point_list = []
-#     range_lo = []
-#     range_hi = []
-
-#     off = 0
-#     for L, b in zip(lengths, bitmap):
-#         L = int(L)
-#         seg = join_keys[off:off+L]
-#         if b == 0:
-#             point_list.append(seg)
-#         else:
-#             # 该 partition 用一次 range scan 覆盖
-#             range_lo.append(int(seg[0]))
-#             range_hi.append(int(seg[-1]))
-#         off += L
-
-#     point_keys = np.concatenate(point_list) if len(point_list) else np.array([], dtype=np.uint64)
-#     range_lo = np.array(range_lo, dtype=np.uint64)
-#     range_hi = np.array(range_hi, dtype=np.uint64)
-
-#     Q_point = int(len(point_keys))
-#     P_range = int(len(range_lo))   # range partition 数（每个对应一次 range scan）
-
-#     # -----------------------
-#     # 3) 计算 cache 容量（页）与总页数
-#     # -----------------------
-#     M_index  = n * seg_size / (2 * epsilon)
-#     M_buffer = M - M_index
-#     C = M_buffer / ps
-#     total_pages = math.ceil(n / ipp)
-
-#     # C<=0：无 buffer，hit=0
-#     if C <= 0:
-#         h = 0.0
-#         # 直接返回“无 cache”下的摊销 I/O
-#         miss_point = expected_DAC(epsilon, ipp, s_point) * Q_point
-#         if P_range > 0:
-#             pos_lo = np.searchsorted(data, range_lo, side='right') - 1
-#             pos_hi = np.searchsorted(data, range_hi, side='right') - 1
-#             RDAC = pos_hi/ipp - pos_lo/ipp + 1 + 2*epsilon/ipp
-#             miss_range = float(np.sum(RDAC))
-#         else:
-#             miss_range = 0.0
-#         cost = (miss_point + miss_range) / Q_total
-#         detail = {"Q_total": Q_total, "Q_point": Q_point, "P_range": P_range, "C_pages": float(C)}
-#         return (cost, h, detail) if return_detail else (cost, h)
-
-#     # -----------------------
-#     # 4) 合并 point/range 的 page access 分布 => h
-#     # -----------------------
-#     # 4.1 point: 复用 point 的 estimate_page_counts
-#     if Q_point > 0:
-#         pc_point, _, _ = estimate_page_counts_from_queryfile(point_keys, data, epsilon, ipp)
-#     else:
-#         pc_point = np.zeros(math.ceil(len(data) / ipp), dtype=np.float64)
-
-#     # 4.2 range: 复用 range 的 estimate_page_counts
-#     if P_range > 0:
-#         pc_range_counter = estimate_page_counts_from_range_queryfile(range_lo, range_hi, data, epsilon, ipp)
-#         pc_range = np.zeros_like(pc_point, dtype=np.float64)
-#         for p, c in pc_range_counter.items():
-#             if 0 <= p < pc_range.size:
-#                 pc_range[p] += c
-#     else:
-#         pc_range = np.zeros_like(pc_point, dtype=np.float64)
-
-#     pc_mix = pc_point + pc_range
-#     total_req = float(pc_mix.sum())
-#     if total_req <= 0:
-#         h = 0.0
-#     else:
-#         q = pc_mix / total_req
-#         q = np.sort(q)[::-1]
-#         buffer_ratio = sample_ratio(C, total_pages, q, Q=int(total_req))
-#         h = validate_ratio(buffer_ratio)
-#         h = validate_ratio(A * h + B)
-
-#     # -----------------------
-#     # 5) 计算 join 的 avg miss I/Os（按 join key 摊销）
-#     # -----------------------
-#     miss_point = (1.0 - h) * expected_DAC(epsilon, ipp, s_point) * Q_point
-
-#     if P_range > 0:
-#         pos_lo = np.searchsorted(data, range_lo, side='right') - 1
-#         pos_hi = np.searchsorted(data, range_hi, side='right') - 1
-#         RDAC = pos_hi/ipp - pos_lo/ipp + 1 + 2*epsilon/ipp   # 与 range_cost_function 一致
-#         miss_range = (1.0 - h) * float(np.sum(RDAC))         # 每个 range partition 执行一次
-#     else:
-#         RDAC = np.array([], dtype=np.float64)
-#         miss_range = 0.0
-
-#     cost = (miss_point + miss_range) / Q_total
-
-#     if not return_detail:
-#         return cost, h
-
-#     detail = {
-#         "Q_total": Q_total,
-#         "Q_point": Q_point,
-#         "P_range": P_range,
-#         "C_pages": float(C),
-#         "total_req_pages_mix": total_req,
-#         "miss_point_total": float(miss_point),
-#         "miss_range_total": float(miss_range),
-#         "RDAC_avg_per_range_part": float(RDAC.mean()) if RDAC.size else 0.0,
-#     }
-#     return cost, h, detail
-
 def join_cost_function(
     epsilon,
     n,
@@ -494,8 +315,6 @@ def join_cost_function(
     join_file="",
     par_file="",
     bitmap_file="",
-    A=A_DEFAULT,   # 这里不再用于 Che 修正，但保留签名兼容
-    B=B_DEFAULT,
     assume_sorted=True,
     return_detail=False,
 ):
@@ -534,7 +353,7 @@ def join_cost_function(
     M_index  = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
     C_pages  = M_buffer / ps
-    # 一个实用的 sufficient condition：至少能容纳单次 point-window 的最大页宽
+
     C_delta  = 1 + int(math.ceil((2.0 * epsilon) / ipp))
 
     # 辅助：把 interval [l,r] 在线并入 union（intervals 输入应当按 l 非递减）
@@ -631,143 +450,194 @@ def join_cost_function(
     return (cost, h, detail) if return_detail else (cost, h)
 
 
-# def join_cost_function(
-#     epsilon,
-#     n,
-#     seg_size,
-#     M,
-#     ipp,
-#     ps,
-#     data_file="",
-#     join_file="",
-#     s="all_in_once",
-#     A=A_DEFAULT,
-#     B=B_DEFAULT,
-#     assume_sorted=True,
-#     return_detail=True,
-# ):
-#     """
-#     Join probe cost model (all-point, sorted order):
-#     - Estimate cache hit rate using Theorem (ordered queries):
-#         h = (n_refs - N_distinct) / n_refs
-#       where:
-#         n_refs     = total page references in the last-mile trace
-#         N_distinct = number of distinct pages touched (union of windows)
-#     - Return avg page-misses per join key (i.e., expected I/Os per query).
-#     """
+def get_RDAC(rlo, rhi, epsilon, ipp):
+    """
+    Exact E[RDAC] under conditioned-uniform (u,v) in F_delta:
+      u,v in [-eps, eps], v >= u - delta, delta=rhi-rlo.
+    Works for scalar or numpy arrays rlo/rhi. Returns numpy array.
+    Complexity: O(eps) per query.
+    """
+    eps = int(epsilon)
+    C = int(ipp)
+    u_vals = np.arange(-eps, eps + 1, dtype=np.int64)  # size = 2eps+1
 
-#     # Resolve paths (consistent with getExpectedCostPerEpsilon usage)
-#     data_path = data_file
-#     join_path = join_file
+    rlo = np.asarray(rlo, dtype=np.int64)
+    rhi = np.asarray(rhi, dtype=np.int64)
+    # ensure broadcastable
+    rlo_flat = rlo.reshape(-1)
+    rhi_flat = rhi.reshape(-1)
 
-#     # Load B.key (sorted data) and join keys
-#     data = np.fromfile(data_path, dtype=np.uint64)[1:]  # keep consistent with cost_function :contentReference[oaicite:2]{index=2}
-#     queries = np.fromfile(join_path, dtype=np.uint64)
+    out = np.empty_like(rlo_flat, dtype=np.float64)
 
-#     Q = int(len(queries))
-#     if Q == 0:
-#         if return_detail:
-#             return 0.0, 0.0, {"Q": 0, "n_refs": 0, "N_distinct": 0}
-#         return 0.0, 0.0
+    for i in range(rlo_flat.size):
+        lo = int(rlo_flat[i])
+        hi = int(rhi_flat[i])
+        if hi < lo:
+            print("[Error] rhi < rlo Detected.")
+        delta = hi - lo
 
-#     # Ensure sorted order (theorem requires contiguity per page block)
-#     if not assume_sorted:
-#         queries = np.sort(queries)
-#     else:
-#         # If caller claims sorted but it's not, sort defensively
-#         if np.any(queries[1:] < queries[:-1]):
-#             queries = np.sort(queries)
+        # L(u) = max(-eps, u - delta)
+        L = np.maximum(-eps, u_vals - delta)  # int
+        w = (eps - L + 1).astype(np.int64)    # number of feasible v per u
+        F = int(w.sum())                       # |F_delta|
 
-#     N = len(data)
-#     if N == 0:
-#         if return_detail:
-#             return 0.0, 0.0, {"Q": Q, "n_refs": 0, "N_distinct": 0}
-#         return 0.0, 0.0
+        # S(u) = floor((rlo + u - eps)/C); clamp start_pos >= 0 for robustness
+        start_pos = np.maximum(0, lo + u_vals - eps)
+        Su = (start_pos // C).astype(np.int64)
 
-#     # Cache capacity (in pages), and theorem precondition C >= C_delta
-#     M_index = n * seg_size / (2 * epsilon)
-#     M_buffer = M - M_index
-#     C_pages = M_buffer / ps
-#     C_delta = 1 + int(math.ceil((2.0 * epsilon) / ipp))  # max pages per query window (approx)
+        # E(v) = floor((rhi + v + eps)/C)
+        v_vals = u_vals
+        Ev = ((hi + v_vals + eps) // C).astype(np.int64)
 
-#     # Map each join key to position in data (B.key)
-#     pos = np.searchsorted(data, queries, side="right") - 1  # :contentReference[oaicite:3]{index=3}
-#     pos = np.clip(pos, 0, N - 1).astype(np.int64)
+        # Prefix sums of Ev over v in [-eps..eps]
+        # PE[k] = sum_{v=-eps}^{v_vals[k]} Ev(v)
+        PE = np.cumsum(Ev, dtype=np.int64)
+        total_E = int(PE[-1])
 
-#     # Build page intervals per query: [l_i, r_i]
-#     start_pos = np.maximum(0, pos - int(epsilon))
-#     end_pos = np.minimum(N - 1, pos + int(epsilon))
-#     l_pages = (start_pos // ipp).astype(np.int64)
-#     r_pages = (end_pos // ipp).astype(np.int64)
+        # sum_{u} sum_{v=L(u)}^{eps} Ev(v)
+        # map L(u) to index in v_vals: idx = L(u) - (-eps) = L(u) + eps
+        idx = (L + eps).astype(np.int64)
+        # sum_{v=L}^{eps} Ev(v) = total_E - sum_{v=-eps}^{L-1} Ev(v)
+        # prefix up to L-1 corresponds to PE[idx-1], if idx>0 else 0
+        prefix_before = np.where(idx > 0, PE[idx - 1], 0)
+        inner_sum_E = (total_E - prefix_before).sum(dtype=np.int64)
 
-#     # Total page references in the trace
-#     lens = (r_pages - l_pages + 1)
-#     n_refs = int(lens.sum())
+        # sum_{u} w(u) * S(u)
+        sum_wS = (w * Su).sum(dtype=np.int64)
 
-#     if n_refs <= 0:
-#         if return_detail:
-#             return 0.0, 0.0, {"Q": Q, "n_refs": 0, "N_distinct": 0}
-#         return 0.0, 0.0
+        out[i] = 1.0 + (inner_sum_E - sum_wS) / F
 
-#     # Distinct pages touched = union length of intervals (one pass merge)
-#     # Since queries are sorted by key, l_pages/r_pages are non-decreasing in practice.
-#     N_distinct = 0
-#     cur_l = int(l_pages[0])
-#     cur_r = int(r_pages[0])
-#     for l, r in zip(l_pages[1:], r_pages[1:]):
-#         l = int(l); r = int(r)
-#         if l > cur_r + 0:   # disjoint
-#             N_distinct += (cur_r - cur_l + 1)
-#             cur_l, cur_r = l, r
-#         else:               # overlap / touch
-#             if r > cur_r:
-#                 cur_r = r
-#     N_distinct += (cur_r - cur_l + 1)
+    return out.reshape(rlo.shape)
 
-#     # Ordered-theorem hit rate (exact under C_pages >= C_delta)
-#     h = (n_refs - N_distinct) / float(n_refs)
-#     h = validate_ratio(h)  # reuse your clamp helper :contentReference[oaicite:4]{index=4}
-#     h = A * h + B          # keep your 1st-order correction hook :contentReference[oaicite:5]{index=5}
-#     h = validate_ratio(h)
+# def estimate_page_counts_from_range_queryfile(rlos, rhis, epsilon, ipp, N):
+#     # page indices
+#     N = int(N)
+#     eps = int(epsilon)
+#     ipp = int(ipp)
+#     lo_pages = rlos // ipp
+#     hi_pages = rhis // ipp
+#     num_pages = math.ceil(N / ipp)
+#     count = Counter()
 
-#     # Average page misses per query == N_distinct / Q
-#     avg_miss_pages = N_distinct / float(Q)
+#     for i in range(len(lo_pages)):
+#         for page in range(lo_pages[i],hi_pages[i]+1):
+#             count[page] += 1
+            
+#     for i in range(len(lo_pages)):
+#         start_pos = max(0,rlos[i]-2*eps)
+#         for page in range(start_pos//ipp,lo_pages[i]):
+#             page_start = page * ipp
+#             page_end   = min((page + 1) * ipp - 1, N - 1)
+#             count[page] += (page_end - max(page_start,start_pos))/(2*eps+1)
+#         end_pos = min(N-1,rhis[i]+2*eps)
+#         for page in range(hi_pages[i]+1,end_pos//ipp+1):
+#             page_start = page * ipp
+#             page_end   = min((page + 1) * ipp - 1, N - 1)
+#             count[page] += (min(page_end,end_pos) - page_start)/(2*eps+1)
+#     return count                  #, k_pages, offset_min
 
-#     # For compatibility with your existing interface, also report "avg pages touched per query"
-#     # This is empirical from trace (n_refs/Q), not the analytic expected_DAC.
-#     avg_pages_touched = n_refs / float(Q)
+def estimate_page_counts_from_range_queryfile(rlos, rhis, epsilon, ipp, N):
+    """
+    Expected per-page reference counts under conditioned-uniform error pairs:
+      u,v in [-eps,eps], v >= u - delta, delta=rhi-rlo
+    and all-at-once fetch interval [S(u), E(v)] inclusive, where
+      S(u)=floor((rlo+u-eps)/ipp), E(v)=floor((rhi+v+eps)/ipp).
+    We exploit that pages in [plo, phi] are always referenced with prob 1,
+    and only a small number of boundary-adjacent pages have fractional probs.
+    """
+    eps = int(epsilon)
+    C = int(ipp)
+    u_vals = np.arange(-eps, eps + 1, dtype=np.int64)  # [-eps..eps]
+    count = Counter()
 
-#     detail = {
-#         "Q": Q,
-#         "C_pages": float(C_pages),
-#         "C_delta": int(C_delta),
-#         "theorem_applicable": bool(C_pages >= C_delta),
-#         "n_refs": int(n_refs),
-#         "N_distinct": int(N_distinct),
-#         "avg_pages_touched": float(avg_pages_touched),
-#         "avg_miss_pages": float(avg_miss_pages),
-#         "h": float(h),
-#     }
+    # true positions
+    # lo_pos = np.searchsorted(data, lo_keys, side='right') - 1
+    # hi_pos = np.searchsorted(data, hi_keys, side='right') - 1
+    # lo_pos = np.clip(lo_pos, 0, N - 1).astype(np.int64)
+    # hi_pos = np.clip(hi_pos, 0, N - 1).astype(np.int64)
 
-#     if return_detail:
-#         return avg_miss_pages, h, detail
-#     return avg_miss_pages, h
+    # ensure lo_pos <= hi_pos (robust)
+    swap = rlos > rhis
+    if np.any(swap):
+        print("[Error] rhi < rlo Detected.")
+        sys.exit(1)
 
-def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_file="",
-                        A=A_DEFAULT,B=B_DEFAULT):
+    for i in range(len(rlos)):
+        rlo = int(rlos[i])
+        rhi = int(rhis[i])
+        delta = rhi - rlo
+
+        plo = rlo // C
+        phi = rhi // C
+
+        # --- feasible-set weights ---
+        # L(u)=max(-eps, u-delta), number of feasible v for each u: w(u)=eps-L(u)+1
+        L = np.maximum(-eps, u_vals - delta)
+        w = (eps - L + 1).astype(np.int64)
+        F = float(w.sum())  # |F_delta|
+
+        # --- core pages: always referenced with prob 1 ---
+        for p in range(int(plo), int(phi) + 1):
+            count[p] += 1.0
+
+        # --- compute S(u) pages (start page) for left boundary ---
+        # clamp start_pos >= 0 for robustness near beginning
+        start_pos = np.maximum(0, rlo + u_vals - eps)
+        Su = (start_pos // C).astype(np.int64)
+
+        # Left boundary pages range: from min_start_page to plo-1
+        min_start_pos = max(0, rlo - 2 * eps)
+        min_start_page = min_start_pos // C
+
+        for p in range(int(min_start_page), int(plo)):
+            # prob = sum_{u: Su<=p} w(u) / F
+            prob = float(w[Su <= p].sum()) / F
+            if prob > 0:
+                count[p] += prob
+
+        # --- right boundary pages ---
+        # Rightmost possible end position: rhi + 2eps (clamp to N-1)
+        max_end_pos = min(N - 1, rhi + 2 * eps)
+        max_end_page = max_end_pos // C
+
+        # For a page p>phi, need E(v) >= p.
+        # E(v)=floor((rhi+v+eps)/C) >= p  <=>  rhi+v+eps >= p*C  <=> v >= p*C-(rhi+eps)
+        for p in range(int(phi) + 1, int(max_end_page) + 1):
+            v0 = p * C - (rhi + eps)          # minimal v (may be < -eps)
+            Vp = max(-eps, v0)                # clamp to [-eps, ...]
+            if Vp > eps:
+                continue  # impossible to reach this page
+
+            # for each u, feasible v lower bound is max(L(u), Vp)
+            lb = np.maximum(L, Vp)
+            cnt_v = np.maximum(0, eps - lb + 1)  # number of v satisfying both constraints
+            prob = float(cnt_v.sum()) / F
+            if prob > 0:
+                count[p] += prob
+
+    return count
+
+def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_file="", fraction=0.3):
     M_index = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
     C = M_buffer/ps
     total_pages = math.ceil(n / ipp)
-    data = np.fromfile(data_file, dtype=np.uint64)[1:]
+
+    data = np.fromfile(data_file, dtype=np.uint64)
     queries = np.fromfile(query_file, dtype=np.uint64).reshape(-1, 2)
+    queries = queries[:int(len(queries)*fraction)]
     lo_keys,hi_keys = queries[:,0],queries[:,1]
-    pos_lo = np.searchsorted(data, lo_keys, side='right') - 1
-    pos_hi = np.searchsorted(data, hi_keys, side='right') - 1
-    # keys = pos_hi - pos_lo
-    # RDAC = np.ceil(keys/ipp) + np.floor(1-(pos_hi%ipp-pos_lo%ipp)/ipp) + 2*epsilon/ipp
-    RDAC = pos_hi/ipp - pos_lo/ipp + 1 + 2*epsilon/ipp
-    page_counts = estimate_page_counts_from_range_queryfile(lo_keys, hi_keys, data, epsilon, ipp)
+    rlo = np.searchsorted(data, lo_keys, side='right') - 1
+    rhi = np.searchsorted(data, hi_keys, side='right') - 1
+    rlo = np.clip(rlo, 0, n - 1).astype(np.int64)
+    rhi = np.clip(rhi, 0, n - 1).astype(np.int64)
+    # keys = rhi - rlo
+    # RDAC = rhi/ipp - rlo/ipp + 1 + 2*epsilon/ipp
+    # old_RDAC = rhi/ipp - rlo/ipp + 1 + 2*epsilon/ipp
+    RDAC = get_RDAC(rlo,rhi,epsilon,ipp)
+    print("RDAC mean:", RDAC.mean(), "max:", RDAC.max())
+    # print("old RDAC mean:", old_RDAC.mean(), "max:", old_RDAC.max())
+    page_counts = estimate_page_counts_from_range_queryfile(rlo, rhi, epsilon, ipp, n)
     total = sum(page_counts.values())
     q = np.array([f / total for f in page_counts.values()], dtype=np.float64)
     q = np.sort(q)[::-1]
@@ -775,12 +645,10 @@ def range_cost_function(epsilon, n, seg_size, M, ipp, ps, query_file="", data_fi
     buffer_ratio = sample_ratio(C, total_pages, q)
     # print(buffer_ratio)
     h = validate_ratio(buffer_ratio)
-    h = A * h + B
     print((1-h)*RDAC.sum()/len(queries))
     return (1-h)*RDAC.sum()/len(queries), h
     
-def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="", data_file="",s="all_in_once",
-                  A=A_DEFAULT,B=B_DEFAULT):
+def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="", data_file="",s="all_in_once"):
     M_index = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
     C = M_buffer/ps
@@ -802,13 +670,10 @@ def cost_function(epsilon, n, seg_size, M, ipp, ps, type="uniform", query_file="
             buffer_ratio = zipf_ratio(C, total_pages,alpha)
         
         h = validate_ratio(buffer_ratio)
-        h = A * h + B
-        
     return (1 - h) * expected_DAC(epsilon, ipp, s), h
 
 
-def getExpectedJoinCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file="",
-                                   A=A_DEFAULT,B=B_DEFAULT):
+def getExpectedJoinCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file=""):
     data = f"{DATASETS_DIRECTORY}{data_file}"
     query = f"{DATASETS_DIRECTORY}{query_file}"
     par = f"{DATASETS_DIRECTORY}{query_file}".replace(".bin",".par")
@@ -820,7 +685,7 @@ def getExpectedJoinCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fil
     least_eps = math.ceil(n*seg_size/(2*M))
     for eps in range(least_eps if (least_eps%2==0) else least_eps+1, 65, 2):
         t1 = time.time()
-        cost,h = join_cost_function(eps, n, seg_size, M, ipp, ps, data, query, par, bitmap, A=A,B=B)
+        cost,h = join_cost_function(eps, n, seg_size, M, ipp, ps, data, query, par, bitmap)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
@@ -839,8 +704,7 @@ def getExpectedJoinCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fil
         for i in range(len(cost_list)):
             f.write(f"{M>>20},{eps_list[i]},{cost_list[i]},{h_list[i]}\n")
     return eps_list, cost_list
-def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file="",
-                                   A=A_DEFAULT,B=B_DEFAULT):
+def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_file="",fraction=0.3):
     data = f"{DATASETS_DIRECTORY}{data_file}"
     query = f"{DATASETS_DIRECTORY}{query_file}"
     eps_list = []
@@ -850,7 +714,7 @@ def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fi
     least_eps = math.ceil(n*seg_size/(2*M))
     for eps in range(least_eps, 65, 2):
         t1 = time.time()
-        cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query, data,A=A,B=B)
+        cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query, data, fraction)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
@@ -863,15 +727,14 @@ def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fi
     
     print("group avg time:", sum(time_list)/len(time_list))
     
-    log_filename = f"{query_file}.range.log".replace(".bin","")
+    log_filename = f"{query_file}.log".replace(".bin","")
     with open(LOG_DIRECTORY+log_filename,'a') as f:
         f.write("M,epsilon,cost,ratio\n")
         for i in range(len(cost_list)):
             f.write(f"{M>>20},{eps_list[i]},{cost_list[i]},{h_list[i]}\n")
     return eps_list, cost_list
 
-def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file="",s="all_in_once",
-                              A=A_DEFAULT,B=B_DEFAULT):
+def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="",query_file="",s="all_in_once"):
     data = f"{DATASETS_DIRECTORY}{data_file}"
     query = f"{DATASETS_DIRECTORY}{query_file}"
     eps_list = []
@@ -879,9 +742,9 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
     h_list = []
     time_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2):
+    for eps in [1024,4096]:     # range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2)
         t1 = time.time()
-        cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s, A=A,B=B)
+        cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s)
         eps_list.append(eps)
         cost_list.append(cost)
         h_list.append(h)
@@ -927,22 +790,21 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
     
 
 def main():
-    M = 256*1024*1024
-    # data_file = f"books_10M_uint64_unique"
-    # query_file = f"books_10M_uint64_unique.query.bin"
-    # eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(1e7),ps=4096,type="sample",
-    #                                                data_file=data_file,query_file=query_file,s="all_in_once",
-    #                                                A=1.0,B=0)
+    M = 60*1024*1024
+    data_file = f"books_10M_uint64_unique"
+    query_file = f"books_10M_uint64_unique.query.bin"
+    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(1e7),ps=4096,type="sample",
+                                                   data_file=data_file,query_file=query_file,s="all_in_once")
     
     # data_file = f"fb_10M_uint64_unique"
-    # query_file = f"range_query_fb_uu.bin"
-    # getExpectedRangeCostPerEpsilon(n=int(1e7),seg_size=16,M=M,ipp=512,ps=4096,query_file=query_file,data_file=data_file,
-    #                                A=1.0,B=0.00284)
+    # query_file = f"fb_10M_uint64_unique.range.bin"
+    # getExpectedRangeCostPerEpsilon(n=int(1e7),seg_size=16,M=M,ipp=512,ps=4096,
+    #                                query_file=query_file,data_file=data_file,fraction=0.3)
     
-    data_file = f"books_200M_uint64_unique"
-    query_file = f"books_200M_uint64_unique.4Mtable2.bin"
-    getExpectedJoinCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,data_file=data_file,query_file=query_file,
-                                   A=1.0,B=0)
+    # data_file = f"books_200M_uint64_unique"
+    # query_file = f"books_200M_uint64_unique.4Mtable2.bin"
+    # getExpectedJoinCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(2e7),ps=4096,data_file=data_file,query_file=query_file,
+    #                                )
     
 if __name__ == "__main__":
     main()

@@ -2,17 +2,17 @@
 #include <cstdint>
 #include <cstddef>
 #include <memory>
-namespace pgm {
+namespace falcon {
 typedef enum CacheType {
     SEGMENT,        // cache for segments
     DATA            // cache for data
 } CacheType;
 
-typedef enum IOInterface {
+typedef enum IOInterfaceType {
     PSYNC,
     LIBAIO,
     IO_URING
-} IOInterface;
+} IOInterfaceType;
 
 // typedef enum CacheStrategy {
 //     NONE,
@@ -60,4 +60,6 @@ constexpr size_t PAGE_SIZE     = 4096;
 constexpr const char* SEGMENT_FILE = "pgm_test_file_seg.bin";
 constexpr size_t ITEM_PER_PAGE = PAGE_SIZE / RECORD_SIZE;
 constexpr size_t BATCH_SIZE    = 64;   // number of pages to read in one batch
+constexpr const char* DATASETS = "/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/";
+
 }

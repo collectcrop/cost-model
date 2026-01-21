@@ -17,17 +17,18 @@
 #include "IO/io_interface.hpp"
 using timer = std::chrono::high_resolution_clock;
 
-class LibaioInterface : public IOInterface {
+namespace falcon {
+class LibaioInterface : public falcon::IOInterface {
 public:
     explicit LibaioInterface(int fd_){
         this->fd = fd_;
     }
     virtual ~LibaioInterface() = default;
     // single page read
-    std::pair<pgm::Page, pgm::IOResult> triggerIO(size_t index) override {
-        pgm::IOResult res;
+    std::pair<falcon::Page, falcon::IOResult> triggerIO(size_t index) override {
+        falcon::IOResult res;
         res.logical_ios = 1;
-        const size_t PAGE = pgm::PAGE_SIZE;
+        const size_t PAGE = falcon::PAGE_SIZE;
 
         // allocate aligned page buffer
         void* raw = nullptr;
@@ -46,7 +47,7 @@ public:
         auto t1 = timer::now();
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
 
-        pgm::Page p;
+        falcon::Page p;
         p.data = std::move(buf);
         p.valid_len = static_cast<size_t>(br >= 0 ? br : 0);
 
@@ -58,18 +59,18 @@ public:
     }
 
 
-    std::pair<std::vector<pgm::Page>, pgm::IOResult> triggerIO(size_t index, size_t len) override {
-        pgm::IOResult res;
-        std::vector<pgm::Page> pages;
-        const size_t total_bytes = pgm::PAGE_SIZE * len;
+    std::pair<std::vector<falcon::Page>, falcon::IOResult> triggerIO(size_t index, size_t len) override {
+        falcon::IOResult res;
+        std::vector<falcon::Page> pages;
+        const size_t total_bytes = falcon::PAGE_SIZE * len;
         // allocate aligned page buffer
         void* raw = nullptr;
-        if (posix_memalign(&raw, pgm::PAGE_SIZE, total_bytes) != 0) {
+        if (posix_memalign(&raw, falcon::PAGE_SIZE, total_bytes) != 0) {
             throw std::runtime_error("posix_memalign failed");
         }
         std::shared_ptr<char[]> buf(reinterpret_cast<char*>(raw), [](char* p){ free(p); });
 
-        off_t offset = static_cast<off_t>(index) * static_cast<off_t>(pgm::PAGE_SIZE);
+        off_t offset = static_cast<off_t>(index) * static_cast<off_t>(falcon::PAGE_SIZE);
 
         auto t0 = timer::now();
         ssize_t br = aio_pread_sync(buf.get(), total_bytes, offset);
@@ -81,17 +82,17 @@ public:
         long long ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
 
         // then separate each page from Aggregated page
-        size_t pages_read = (br + pgm::PAGE_SIZE - 1) / pgm::PAGE_SIZE;
+        size_t pages_read = (br + falcon::PAGE_SIZE - 1) / falcon::PAGE_SIZE;
         for (size_t i = 0; i < pages_read; i++) {
-            pgm::Page page;
+            falcon::Page page;
             void* page_ptr = nullptr;
-            if (posix_memalign(&page_ptr, pgm::PAGE_SIZE, pgm::PAGE_SIZE) != 0) {
+            if (posix_memalign(&page_ptr, falcon::PAGE_SIZE, falcon::PAGE_SIZE) != 0) {
                 throw std::runtime_error("posix_memalign failed for sub-page");
             }
             page.data.reset(reinterpret_cast<char*>(page_ptr), [](char* p){ free(p); });
 
-            size_t copy_size = std::min(static_cast<size_t>(br - i * pgm::PAGE_SIZE), (size_t)pgm::PAGE_SIZE);
-            memcpy(page.data.get(), buf.get() + i * pgm::PAGE_SIZE, copy_size);
+            size_t copy_size = std::min(static_cast<size_t>(br - i * falcon::PAGE_SIZE), (size_t)falcon::PAGE_SIZE);
+            memcpy(page.data.get(), buf.get() + i * falcon::PAGE_SIZE, copy_size);
 
             page.valid_len = copy_size;
             pages.push_back(std::move(page));
@@ -156,3 +157,4 @@ private:
     return static_cast<ssize_t>(res);
     }
 };
+}

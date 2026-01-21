@@ -60,32 +60,32 @@ static std::vector<T> load_binary(const std::string& filename, bool has_header=f
     return v;
 }
 
-// static std::vector<pgm::RangeQ> load_ranges(const std::string& filename) {
+// static std::vector<falcon::RangeQ> load_ranges(const std::string& filename) {
 //     std::ifstream in(filename, std::ios::binary);
 //     if (!in) { std::cerr << "open range file failed: " << filename << "\n"; return {}; }
 //     in.seekg(0, std::ios::end);
 //     size_t bytes = static_cast<size_t>(in.tellg());
 //     in.seekg(0, std::ios::beg);
-//     if (bytes % sizeof(pgm::RangeQ) != 0) {
+//     if (bytes % sizeof(falcon::RangeQ) != 0) {
 //         std::cerr << "range file size not multiple of 16 bytes: " << bytes << "\n";
 //         return {};
 //     }
-//     size_t n = bytes / sizeof(pgm::RangeQ);
-//     std::vector<pgm::RangeQ> rq(n);
+//     size_t n = bytes / sizeof(falcon::RangeQ);
+//     std::vector<falcon::RangeQ> rq(n);
 //     in.read(reinterpret_cast<char*>(rq.data()), bytes);
 //     return rq;
 // }
 
-std::vector<pgm::RangeQ> load_ranges(const std::string& filename) {
-    std::vector<pgm::RangeQ> queries;
+std::vector<falcon::RangeQ> load_ranges(const std::string& filename) {
+    std::vector<falcon::RangeQ> queries;
     std::ifstream fin(filename, std::ios::binary);
     if (!fin) {
         std::cerr << "Failed to open file " << filename << std::endl;
         return queries;
     }
 
-    pgm::RangeQ rq;
-    while (fin.read(reinterpret_cast<char*>(&rq), sizeof(pgm::RangeQ))) {
+    falcon::RangeQ rq;
+    while (fin.read(reinterpret_cast<char*>(&rq), sizeof(falcon::RangeQ))) {
         queries.push_back(rq);
     }
 
@@ -100,7 +100,7 @@ uint64_t extract_key(const char* record) {
     return key;
 }
 
-bool binary_search_record(pgm::Record* records, size_t lo, size_t hi, KeyType target_key){
+bool binary_search_record(falcon::Record* records, size_t lo, size_t hi, KeyType target_key){
     size_t left = lo;
     size_t right = hi;
     while (left <= right) {
@@ -146,20 +146,20 @@ std::vector<T> load_data_pgm_safe(const std::string &filename, size_t n) {
     return data;
 }
 
-std::vector<pgm::RangeQ> load_ranges_pgm_safe(const std::string& filename) {
+std::vector<falcon::RangeQ> load_ranges_pgm_safe(const std::string& filename) {
     std::ifstream in(filename, std::ios::binary);
     if (!in) {
         throw std::runtime_error("Failed to open range file: " + filename);
     }
 
-    std::vector<pgm::RangeQ> ranges;
+    std::vector<falcon::RangeQ> ranges;
     constexpr KeyType SENTINEL = std::numeric_limits<KeyType>::max();
 
-    pgm::RangeQ q;
+    falcon::RangeQ q;
     size_t total = 0;
     size_t skipped_sentinel = 0;
 
-    while (in.read(reinterpret_cast<char*>(&q), sizeof(pgm::RangeQ))) {
+    while (in.read(reinterpret_cast<char*>(&q), sizeof(falcon::RangeQ))) {
         ++total;
 
         // 跳过包含 SENTINEL 的区间（lo 或 hi 任一为哨兵值）

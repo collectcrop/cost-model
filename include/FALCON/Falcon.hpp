@@ -57,16 +57,16 @@ public:
 class Worker {
 public:
     Worker(int fd,
-           pgm::IOInterface which,
-           std::unique_ptr<pgm::ICache> cache,     // 注入缓存
+           falcon::IOInterfaceType which,
+           std::unique_ptr<falcon::ICache> cache,     // 注入缓存
            size_t max_pages_per_batch,
            long max_wait_us)
     : fd_(fd), cache_(std::move(cache)),
       max_pages_(max_pages_per_batch), max_wait_us_(max_wait_us) {
         switch (which) {
-            case pgm::PSYNC:    io_.reset(new SyncInterface(fd));   break;
-            case pgm::LIBAIO:   io_.reset(new LibaioInterface(fd)); break;
-            case pgm::IO_URING: io_.reset(new IoUringInterface(fd));break;
+            case falcon::PSYNC:    io_.reset(new SyncInterface(fd));   break;
+            case falcon::LIBAIO:   io_.reset(new LibaioInterface(fd)); break;
+            case falcon::IO_URING: io_.reset(new IoUringInterface(fd));break;
         }
         th_ = std::thread([this]{ this->run(); });
     }
@@ -79,7 +79,7 @@ public:
 
     void submit(Req&& r) { in_.push(std::move(r)); cv_.notify_one(); }
 
-    const pgm::ICache& cache() const { return *cache_; }
+    const falcon::ICache& cache() const { return *cache_; }
     FalconStats stats() const {
         FalconStats s{};
         const auto& cs = cache_->stats();
@@ -99,9 +99,9 @@ public:
 
 private:
     int fd_;
-    // std::unique_ptr<pgm::ICache> io_cache_;
-    std::unique_ptr<IOInterface> io_;
-    std::unique_ptr<pgm::ICache> cache_;
+    // std::unique_ptr<falcon::ICache> io_cache_;
+    std::unique_ptr<falcon::IOInterface> io_;
+    std::unique_ptr<falcon::ICache> cache_;
 
     size_t max_pages_;
     long   max_wait_us_;
@@ -147,13 +147,13 @@ private:
             pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
 
             // 2) 先查缓存：命中页直接准备好；未命中页放 need_io
-            std::unordered_map<size_t, pgm::Page> ready;
+            std::unordered_map<size_t, falcon::Page> ready;
             ready.reserve(pages.size()*2);
             std::vector<size_t> need_io;
             need_io.reserve(pages.size());
             for (auto pgidx : pages) {
                 size_t m = freq[pgidx];     // 这个页在本 batch 被访问了 m 次
-                pgm::Page ph;
+                falcon::Page ph;
                 if (cache_->get(pgidx, ph) && ph.data && ph.valid_len > 0) {
                     ready.emplace(pgidx, std::move(ph));
                     logical_hits_.fetch_add(m, std::memory_order_relaxed);
@@ -179,13 +179,13 @@ private:
                 // 回灌缓存 + 加入 ready
                 for (size_t i = 0; i < need_io.size(); ++i) {
                     size_t pgidx = need_io[i];
-                    pgm::Page page = std::move(vec[i]); // 可能为空（错误或文件尾）
+                    falcon::Page page = std::move(vec[i]); // 可能为空（错误或文件尾）
                     if (page.data && page.valid_len > 0) {
-                        cache_->put(pgidx, pgm::Page{ page.data, page.valid_len }); // 共享句柄
+                        cache_->put(pgidx, falcon::Page{ page.data, page.valid_len }); // 共享句柄
                         ready.emplace(pgidx, std::move(page));
                     } else {
                         // 留空页进入 ready；后续 fulfill 会跳过
-                        ready.emplace(pgidx, pgm::Page{});
+                        ready.emplace(pgidx, falcon::Page{});
                     }
                 }
             }
@@ -197,7 +197,7 @@ private:
         }
     }
 
-    void fulfill(Req& r, const std::unordered_map<size_t, pgm::Page>& page_map) {
+    void fulfill(Req& r, const std::unordered_map<size_t, falcon::Page>& page_map) {
         if (r.kind == ReqKind::Point) {
             PointResult ret{};
             ret.key = r.key;
@@ -206,8 +206,8 @@ private:
                 if (it == page_map.end()) continue;
                 const auto& pg = it->second;
                 if (!pg.data || pg.valid_len == 0) continue;
-                auto* recs = reinterpret_cast<pgm::Record*>(pg.data.get());
-                size_t cnt = pg.valid_len / sizeof(pgm::Record);
+                auto* recs = reinterpret_cast<falcon::Record*>(pg.data.get());
+                size_t cnt = pg.valid_len / sizeof(falcon::Record);
                 if (recs[0].key > r.key || recs[cnt-1].key < r.key) continue;
                 if (binary_search_record(recs, 0, cnt-1, r.key)) { ret.found = true; ret.key = r.key; break; }
             }
@@ -220,15 +220,15 @@ private:
                 const auto& pg = it->second;
                 if (!pg.data || pg.valid_len == 0) continue;
 
-                auto* recs = reinterpret_cast<pgm::Record*>(pg.data.get());
-                size_t cnt = pg.valid_len / sizeof(pgm::Record);
+                auto* recs = reinterpret_cast<falcon::Record*>(pg.data.get());
+                size_t cnt = pg.valid_len / sizeof(falcon::Record);
                 if (recs[cnt-1].key < r.lo_key) continue;
                 if (recs[0].key > r.hi_key) break;
 
                 auto* lb = std::lower_bound(recs, recs+cnt, r.lo_key,
-                                [](const pgm::Record& a, uint64_t k){ return a.key < k; });
+                                [](const falcon::Record& a, uint64_t k){ return a.key < k; });
                 auto* ub = std::upper_bound(recs, recs+cnt, r.hi_key,
-                                [](uint64_t k, const pgm::Record& a){ return k < a.key; });
+                                [](uint64_t k, const falcon::Record& a){ return k < a.key; });
                 for (auto* cur = lb; cur < ub; ++cur) ret.keys.push_back(cur->key);
             }
             r.prom_range.set_value(std::move(ret));
@@ -244,9 +244,9 @@ public:
 
     FalconPGM(IndexT& index,
               int data_fd,
-              pgm::IOInterface io_kind,
+              falcon::IOInterfaceType io_kind,
               size_t memory_budget_bytes,                 
-              pgm::CachePolicy cache_policy = pgm::CachePolicy::LRU,
+              falcon::CachePolicy cache_policy = falcon::CachePolicy::LRU,
               size_t cache_shards = 1,
               size_t max_pages_per_batch = 128,
               long max_wait_us = 50,
@@ -254,9 +254,9 @@ public:
     : idx_(index) {
         workers_.reserve(workers);
         for (size_t i = 0; i < workers; ++i) {
-            auto cache = pgm::MakeShardedCache(cache_policy,
+            auto cache = falcon::MakeShardedCache(cache_policy,
                                                memory_budget_bytes,
-                                               pgm::PAGE_SIZE,
+                                               falcon::PAGE_SIZE,
                                                cache_shards);
             workers_.emplace_back(new Worker(data_fd, io_kind,
                                              std::move(cache),
@@ -322,9 +322,9 @@ class FalconRMI {
 public:
     FalconRMI(RMIIndexT& index,
               int data_fd,
-              pgm::IOInterface io_kind,
+              falcon::IOInterfaceType io_kind,
               size_t memory_budget_bytes,
-              pgm::CachePolicy cache_policy = pgm::CachePolicy::LRU,
+              falcon::CachePolicy cache_policy = falcon::CachePolicy::LRU,
               size_t cache_shards = 1,
               size_t max_pages_per_batch = 128,
               long max_wait_us = 50,
@@ -333,9 +333,9 @@ public:
         : idx_(index),n_(n) {
         workers_.reserve(workers);
         for (size_t i = 0; i < workers; ++i) {
-            auto cache = pgm::MakeShardedCache(cache_policy,
+            auto cache = falcon::MakeShardedCache(cache_policy,
                                                memory_budget_bytes,
-                                               pgm::PAGE_SIZE,
+                                               falcon::PAGE_SIZE,
                                                cache_shards); 
             workers_.emplace_back(
                 std::make_unique<Worker>(data_fd,
@@ -360,8 +360,8 @@ public:
 
         // ====================================
 
-        size_t plo = pos_lo / pgm::ITEM_PER_PAGE;
-        size_t phi = pos_hi / pgm::ITEM_PER_PAGE;
+        size_t plo = pos_lo / falcon::ITEM_PER_PAGE;
+        size_t phi = pos_hi / falcon::ITEM_PER_PAGE;
 
         Req r; r.kind = ReqKind::Point; r.page_lo = plo; r.page_hi = phi; r.key = (uint64_t)key;
         std::promise<PointResult> p; auto fut = p.get_future(); r.prom_point = std::move(p);
@@ -386,8 +386,8 @@ public:
         size_t pos_lo = std::min(pos_lo1, pos_lo2);
         size_t pos_hi = std::max(pos_hi1, pos_hi2);
 
-        size_t plo = pos_lo / pgm::ITEM_PER_PAGE;
-        size_t phi = pos_hi / pgm::ITEM_PER_PAGE;
+        size_t plo = pos_lo / falcon::ITEM_PER_PAGE;
+        size_t phi = pos_hi / falcon::ITEM_PER_PAGE;
 
         Req r; r.kind = ReqKind::Range; r.page_lo = plo; r.page_hi = phi; r.lo_key = lo_key; r.hi_key = hi_key;
         std::promise<RangeResult> p; auto fut = p.get_future(); r.prom_range = std::move(p);

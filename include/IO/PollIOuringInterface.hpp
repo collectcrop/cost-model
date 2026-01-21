@@ -17,8 +17,8 @@
 #include "IO/io_interface.hpp"
 using timer = std::chrono::high_resolution_clock;
 
-// Note: link with -luring
-class IoUringInterface : public IOInterface {
+namespace falcon {
+class IoUringInterface : public falcon::IOInterface {
 public:
     explicit IoUringInterface(int fd_, unsigned queue_depth = 256) {
         this->fd = fd_;
@@ -33,10 +33,10 @@ public:
     }
 
     // single page read
-    std::pair<pgm::Page, pgm::IOResult> triggerIO(size_t index) override {
-        pgm::IOResult res;
+    std::pair<falcon::Page, falcon::IOResult> triggerIO(size_t index) override {
+        falcon::IOResult res;
         res.logical_ios = 1;
-        const size_t PAGE = pgm::PAGE_SIZE;
+        const size_t PAGE = falcon::PAGE_SIZE;
 
         // allocate aligned page buffer
         void* raw = nullptr;
@@ -82,7 +82,7 @@ public:
             throw std::runtime_error(std::string("io_uring read failed: ") + std::strerror(err));
         }
 
-        pgm::Page p;
+        falcon::Page p;
         p.data = std::move(buf);
         p.valid_len = static_cast<size_t>(res_bytes >= 0 ? res_bytes : 0);
 
@@ -94,19 +94,19 @@ public:
     }
 
     // multi-page read (read len pages starting from index)
-    std::pair<std::vector<pgm::Page>, pgm::IOResult> triggerIO(size_t index, size_t len) override {
-        pgm::IOResult res;
-        std::vector<pgm::Page> pages;
+    std::pair<std::vector<falcon::Page>, falcon::IOResult> triggerIO(size_t index, size_t len) override {
+        falcon::IOResult res;
+        std::vector<falcon::Page> pages;
 
-        const size_t total_bytes = pgm::PAGE_SIZE * len;
+        const size_t total_bytes = falcon::PAGE_SIZE * len;
         // allocate an aggregated aligned buffer
         void* raw = nullptr;
-        if (posix_memalign(&raw, pgm::PAGE_SIZE, total_bytes) != 0) {
+        if (posix_memalign(&raw, falcon::PAGE_SIZE, total_bytes) != 0) {
             throw std::runtime_error("posix_memalign failed");
         }
         std::shared_ptr<char> buf(reinterpret_cast<char*>(raw), [](char* p){ free(p); });
 
-        off_t offset = static_cast<off_t>(index) * static_cast<off_t>(pgm::PAGE_SIZE);
+        off_t offset = static_cast<off_t>(index) * static_cast<off_t>(falcon::PAGE_SIZE);
 
         auto t0 = timer::now();
 
@@ -140,18 +140,18 @@ public:
         }
 
         // split into pages: allocate per-page buffers and copy
-        size_t pages_read = (br + pgm::PAGE_SIZE - 1) / pgm::PAGE_SIZE;
+        size_t pages_read = (br + falcon::PAGE_SIZE - 1) / falcon::PAGE_SIZE;
         for (size_t i = 0; i < pages_read; ++i) {
-            pgm::Page page;
+            falcon::Page page;
             void* page_ptr = nullptr;
-            if (posix_memalign(&page_ptr, pgm::PAGE_SIZE, pgm::PAGE_SIZE) != 0) {
+            if (posix_memalign(&page_ptr, falcon::PAGE_SIZE, falcon::PAGE_SIZE) != 0) {
                 throw std::runtime_error("posix_memalign failed for sub-page");
             }
             page.data.reset(reinterpret_cast<char*>(page_ptr), [](char* p){ free(p); });
 
-            size_t copy_size = std::min(static_cast<size_t>(br - i * pgm::PAGE_SIZE), (size_t)pgm::PAGE_SIZE);
+            size_t copy_size = std::min(static_cast<size_t>(br - i * falcon::PAGE_SIZE), (size_t)falcon::PAGE_SIZE);
             if (copy_size > 0) {
-                memcpy(page.data.get(), buf.get() + i * pgm::PAGE_SIZE, copy_size);
+                memcpy(page.data.get(), buf.get() + i * falcon::PAGE_SIZE, copy_size);
             }
             page.valid_len = copy_size;
             pages.push_back(std::move(page));
@@ -165,10 +165,10 @@ public:
         return { std::move(pages), res };
     }
 
-    std::pair<std::vector<pgm::Page>, pgm::IOResult>
+    std::pair<std::vector<falcon::Page>, falcon::IOResult>
     triggerIO_batch(const std::vector<size_t>& indices) override {
-        pgm::IOResult stats{};
-        std::vector<pgm::Page> out;
+        falcon::IOResult stats{};
+        std::vector<falcon::Page> out;
         out.resize(indices.size());
         if (indices.empty()) return { std::move(out), stats };
 
@@ -214,10 +214,10 @@ public:
         auto t0 = timer::now();
 
         for (auto &rg : ranges) {
-            size_t bytes = rg.len * pgm::PAGE_SIZE;
+            size_t bytes = rg.len * falcon::PAGE_SIZE;
 
             void* raw = nullptr;
-            if (posix_memalign(&raw, pgm::PAGE_SIZE, bytes) != 0)
+            if (posix_memalign(&raw, falcon::PAGE_SIZE, bytes) != 0)
                 throw std::runtime_error("posix_memalign failed");
 
             std::shared_ptr<char> agg(reinterpret_cast<char*>(raw), [](char* p){ free(p); });
@@ -229,7 +229,7 @@ public:
                 sqe = io_uring_get_sqe(&ring);
                 if (!sqe) throw std::runtime_error("io_uring_get_sqe null");
             }
-            off_t off = static_cast<off_t>(rg.start) * static_cast<off_t>(pgm::PAGE_SIZE);
+            off_t off = static_cast<off_t>(rg.start) * static_cast<off_t>(falcon::PAGE_SIZE);
             io_uring_prep_read(sqe, fd, agg.get(), bytes, off);
             io_uring_sqe_set_data(sqe, &rg);
 
@@ -253,7 +253,7 @@ public:
 
             if (br < 0) {
                 // 读失败：按请求位置填空页
-                for (auto pos : rg->positions) out[pos] = pgm::Page{};
+                for (auto pos : rg->positions) out[pos] = falcon::Page{};
                 continue;
             }
 
@@ -264,22 +264,22 @@ public:
             stats.bytes += br;
             stats.physical_ios += 1;
 
-            size_t got_pages = (br + pgm::PAGE_SIZE - 1) / pgm::PAGE_SIZE;
+            size_t got_pages = (br + falcon::PAGE_SIZE - 1) / falcon::PAGE_SIZE;
             got_pages = std::min(got_pages, rg->len);
 
             // 对该片段内所有被请求的原始位次，切页复制回 out[pos]
             for (auto pos : rg->positions) {
                 size_t page_idx = indices[pos];         // 原始页号
                 size_t rel      = page_idx - rg->start; // 片段内相对偏移
-                pgm::Page p;
+                falcon::Page p;
                 if (rel < got_pages) {
                     void* per = nullptr;
-                    if (posix_memalign(&per, pgm::PAGE_SIZE, pgm::PAGE_SIZE) != 0)
+                    if (posix_memalign(&per, falcon::PAGE_SIZE, falcon::PAGE_SIZE) != 0)
                         throw std::runtime_error("posix_memalign sub failed");
                     std::shared_ptr<char[]> buf(reinterpret_cast<char*>(per), [](char* q){ free(q); });
-                    size_t copy = std::min(static_cast<size_t>(br - rel*pgm::PAGE_SIZE), (size_t)pgm::PAGE_SIZE);
+                    size_t copy = std::min(static_cast<size_t>(br - rel*falcon::PAGE_SIZE), (size_t)falcon::PAGE_SIZE);
                     if ((long)copy > 0) {
-                        std::memcpy(buf.get(), it->buf.get() + rel*pgm::PAGE_SIZE, copy);
+                        std::memcpy(buf.get(), it->buf.get() + rel*falcon::PAGE_SIZE, copy);
                         p.data = std::move(buf);
                         p.valid_len = copy;
                     }
@@ -297,3 +297,4 @@ public:
 private:
     struct io_uring ring;
 };
+}

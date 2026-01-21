@@ -21,7 +21,7 @@
 #include "cache/CacheInterface.hpp"
 
 using KeyType = uint64_t;
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
+// #define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
 
 
 struct BenchmarkResult {
@@ -38,7 +38,7 @@ struct BenchmarkResult {
 // ---- Worker for range queries ----
 template <size_t Epsilon>
 static void worker_range(falcon::FalconPGM<uint64_t, Epsilon, 4>* F,
-                         const std::vector<pgm::RangeQ>& queries,
+                         const std::vector<falcon::RangeQ>& queries,
                          size_t begin, size_t end) {
     constexpr size_t BATCH = 128;
     size_t i = begin;
@@ -63,12 +63,12 @@ static void worker_range(falcon::FalconPGM<uint64_t, Epsilon, 4>* F,
 // ---- Benchmark driver ----
 template <size_t Epsilon>
 static BenchmarkResult bench_range(std::vector<KeyType> data,
-                                   std::vector<pgm::RangeQ> ranges,
+                                   std::vector<falcon::RangeQ> ranges,
                                    const std::string& datafile,
-                                   pgm::CachePolicy policy,
+                                   falcon::CachePolicy policy,
                                    int num_threads,
                                    size_t memory_budget_bytes,
-                                   pgm::IOInterface io_iface = pgm::IO_URING) {
+                                   falcon::IOInterfaceType io_iface = falcon::IO_URING) {
     using Clock = std::chrono::high_resolution_clock;
 
     // 1) Build PGM (in-memory; for page window estimation only)
@@ -124,50 +124,86 @@ static BenchmarkResult bench_range(std::vector<KeyType> data,
 }
 
 int main(int argc, char** argv) {
-    // 数据与查询文件（按需修改）
-    const std::string dataset  = "books_200M_uint64_unique";       
-    const std::string datafile = std::string(DATASETS) + dataset;
-    const std::string rangefile= std::string(DATASETS) + "books_200M_uint64_unique.range.bin";     
-    // 基础参数
-    const int    N_KEYS     = 200000000;
-    const size_t MEM_BUDGET = 256ull * 1024 * 1024; 
-    size_t repeat = 3;
+    if (argc < 3) {
+        std::cerr << "Usage:\n  " << argv[0]
+                  << " <dataset_basename> <num_keys> [memory_mb] [repeats]\n\n"
+                  << "Example:\n  " << argv[0]
+                  << " books_200M_uint64_unique 200000000 40 3\n";
+        return 1;
+    }
+
+    std::string dataset_basename = argv[1]; 
+    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
+    int mem_mb = 256;
+    if (argc >= 4) {
+        mem_mb = std::atoi(argv[3]);
+        if (mem_mb < 0) mem_mb = 0;
+    }
+    size_t MemoryBudget = static_cast<size_t>(mem_mb) * 1024ull * 1024ull;
+    
+    size_t repeats = 3;
+    if (argc >= 5) {
+        repeats = std::atoi(argv[4]);
+        if (repeats <= 0) repeats = 1;
+    }
+
+    // std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
+    // std::string query_fname  = dataset_basename + ".query.bin";   
+    
+    std::string filename     = dataset_basename; 
+    std::string query_fname  = dataset_basename + ".range.bin";                    
+    // std::string query_fname  = dataset_basename + ".1Mtable.bin";   
+    std::string file         = falcon::DATASETS + filename;
+    std::string query_file   = falcon::DATASETS + query_fname;
+
     // 读取数据与 range 查询
-    auto data   = load_data(datafile, N_KEYS);
-    auto ranges = load_ranges(rangefile);
-    if (data.empty() || ranges.empty()) return 1;
+    auto data   = load_data(file, num_keys);
+    std::vector<falcon::RangeQ>  all_queries = load_ranges(query_file);
+    if (data.empty() || all_queries.empty()) return 1;
+
+    size_t N = all_queries.size();
+    size_t eval_begin = static_cast<size_t>(0.3 * N);  // 30% profiling，70% evaluation
+
+    // std::vector<falcon::RangeQ> ranges(
+    //     all_queries.begin() + eval_begin,
+    //     all_queries.end()
+    // );
+    std::vector<falcon::RangeQ> ranges(
+        all_queries.begin(),
+        all_queries.begin() + eval_begin
+    );
 
     // 输出 CSV
-    std::ofstream csv("books_200MB_1Mquery_join.range.csv", std::ios::out | std::ios::trunc);
+    std::ofstream csv("range_fb_10M_M"+std::to_string(mem_mb)+".csv", std::ios::out | std::ios::trunc);
     csv << "epsilon,threads,avg_latency_ns,wall_s,hit_ratio,avg_IOs,data_io_ns\n";
     csv << std::fixed << std::setprecision(6);
 
     // 线程与策略
     const int threads =  1;
-    const pgm::CachePolicy policy = pgm::CachePolicy::LRU;
+    const falcon::CachePolicy policy = falcon::CachePolicy::LRU;
 
-    for (int r = 0; r < repeat; ++r) {
+    for (int r = 0; r < repeats; ++r) {
         for (size_t eps : {2,4,8,12,16,20,24,32,48,64,128}) {           // 8,12,16,20,24,32,48,64,128
-            size_t idx_est = 16ull * N_KEYS / (2*eps);
-            if (MEM_BUDGET <= idx_est) {
+            size_t idx_est = 16ull * num_keys / (2*eps);
+            if (MemoryBudget <= idx_est) {
                 std::cout << "Skipping eps=" << eps << " due to insufficient memory budget\n";
                 continue;
             }
-            size_t buf_budget = (MEM_BUDGET > idx_est) ? (MEM_BUDGET - idx_est) : 0;
+            size_t buf_budget = (MemoryBudget > idx_est) ? (MemoryBudget - idx_est) : 0;
 
             BenchmarkResult r;
             switch (eps) {
-                case 2:   r = bench_range<2>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 4:   r = bench_range<4>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 8:   r = bench_range<8>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 12:  r = bench_range<12>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 16:  r = bench_range<16>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 20:  r = bench_range<20>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 24:  r = bench_range<24>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 32:  r = bench_range<32>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 48:  r = bench_range<48>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 64:  r = bench_range<64>(data, ranges, datafile, policy, threads, buf_budget); break;
-                case 128: r = bench_range<128>(data, ranges, datafile, policy, threads, buf_budget); break;
+                case 2:   r = bench_range<2>(data, ranges, file, policy, threads, buf_budget); break;
+                case 4:   r = bench_range<4>(data, ranges, file, policy, threads, buf_budget); break;
+                case 8:   r = bench_range<8>(data, ranges, file, policy, threads, buf_budget); break;
+                case 12:  r = bench_range<12>(data, ranges, file, policy, threads, buf_budget); break;
+                case 16:  r = bench_range<16>(data, ranges, file, policy, threads, buf_budget); break;
+                case 20:  r = bench_range<20>(data, ranges, file, policy, threads, buf_budget); break;
+                case 24:  r = bench_range<24>(data, ranges, file, policy, threads, buf_budget); break;
+                case 32:  r = bench_range<32>(data, ranges, file, policy, threads, buf_budget); break;
+                case 48:  r = bench_range<48>(data, ranges, file, policy, threads, buf_budget); break;
+                case 64:  r = bench_range<64>(data, ranges, file, policy, threads, buf_budget); break;
+                case 128: r = bench_range<128>(data, ranges, file, policy, threads, buf_budget); break;
                 default:  continue;
             }
 
