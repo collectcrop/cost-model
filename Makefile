@@ -5,6 +5,9 @@ INCLUDES := -I ./include
 CACHE_FACTORY := ./include/cache/CacheFactory.cpp 
 # TARGETS := ./experiments/rmi_falcon_test  
 
+falcon_thread_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/parallel.cpp $(CACHE_FACTORY) $(LDFLAGS)
+
 falcon_wait_test:
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/parallel5.cpp $(CACHE_FACTORY) $(LDFLAGS)
 
@@ -51,3 +54,5 @@ bplustree_test:
 # 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./include/bplustree/stx_disk_kv.cpp ./experiments/benchmark/bplustree_test.cpp $(LDFLAGS)
 	g++ -O3 -g -pthread ./include/bplustree/stx_disk_kv.cpp -I ./include ./experiments/benchmark/bplustree_test.cpp -o test $(LDFLAGS)
 
+index_build_test:
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o ./test ./experiments/build.cpp $(LDFLAGS)

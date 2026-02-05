@@ -2,6 +2,9 @@
 #include <cstdint>
 #include <cstddef>
 #include <memory>
+
+using KeyType = uint64_t;
+
 namespace falcon {
 typedef enum CacheType {
     SEGMENT,        // cache for segments
@@ -20,7 +23,12 @@ typedef enum IOInterfaceType {
 //     LFU,
 //     FIFO
 // } CacheStrategy;
-enum class CachePolicy { NONE, FIFO, LRU, LFU };
+typedef enum CachePolicy { 
+    NONE, 
+    FIFO,
+    LRU,
+    LFU 
+} CachePolicy;
 
 typedef enum RangeSearchStrategy {
     LO,

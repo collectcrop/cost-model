@@ -49,7 +49,7 @@ echo "================================================="
 mkdir -p results
 
 for depth in "${DEPTHS[@]}"; do
-    for mode in io_uring; do    # psync libaio io_uring
+    for mode in psync libaio io_uring; do    # psync libaio io_uring
         result_file="results/${mode}_${depth}.txt"
         rm -f "$result_file"
 

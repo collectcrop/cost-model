@@ -4,10 +4,8 @@
 #include <cstdint>
 #include <limits>
 #include <fstream>
+#include <iostream>
 #include "include.hpp"
-
-// 定义 KeyType（要和主程序保持一致）
-using KeyType = uint64_t;
 
 // 加载数据
 std::vector<KeyType> load_data(const std::string& filename, size_t total_keys) {

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <mutex>
 #include <functional>
+#include <vector>
 #include <shared_mutex>
 #include <condition_variable>
 
@@ -70,7 +71,7 @@ ssize_t StxDiskKV::get_record(Key k, void* buf, size_t len) const {
   return pread_aligned(buf, len, (off_t)off);
 }
 
-void StxDiskKV::bulk_build(const Key* keys, const Offset* offs, size_t n) {
+void StxDiskKV::bulk_build(std::vector<KeyType> keys, const Offset* offs, size_t n) {
   std::unique_lock lk(mu_);
   for (size_t i = 0; i < n; ++i) index_.insert(keys[i], offs[i]);
 }

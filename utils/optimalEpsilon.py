@@ -712,7 +712,9 @@ def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fi
     h_list = []
     time_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(least_eps, 65, 2):
+    # r = range(least_eps, 65, 2)
+    r = range(8,17)
+    for eps in r:
         t1 = time.time()
         cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query, data, fraction)
         eps_list.append(eps)
@@ -742,7 +744,7 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
     h_list = []
     time_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in [1024,4096]:     # range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2)
+    for eps in range(8,17):     # range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2)
         t1 = time.time()
         cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s)
         eps_list.append(eps)
@@ -791,15 +793,17 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
 
 def main():
     M = 60*1024*1024
-    data_file = f"books_10M_uint64_unique"
-    query_file = f"books_10M_uint64_unique.query.bin"
-    eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(1e7),ps=4096,type="sample",
-                                                   data_file=data_file,query_file=query_file,s="all_in_once")
+    # data_file = f"books_100M_uint64_unique"
+    # query_file = f"books_100M_uint64_unique.4Mquery.bin"
+    # eps_list,cost_list = getExpectedCostPerEpsilon(ipp=512,seg_size=16,M=M,n=int(1e8),ps=4096,type="sample",
+    #                                                data_file=data_file,query_file=query_file,s="all_in_once")
     
-    # data_file = f"fb_10M_uint64_unique"
-    # query_file = f"fb_10M_uint64_unique.range.bin"
-    # getExpectedRangeCostPerEpsilon(n=int(1e7),seg_size=16,M=M,ipp=512,ps=4096,
-    #                                query_file=query_file,data_file=data_file,fraction=0.3)
+    data_file = f"fb_100M_uint64_unique"
+    query_file = f"fb_100M_uint64_unique.4Mrange.bin"
+    # data_file = f"books_20M_uint64_unique"
+    # query_file = f"books_20M_uint64_unique.range.bin"
+    getExpectedRangeCostPerEpsilon(n=int(1e8),seg_size=16,M=M,ipp=512,ps=4096,
+                                   query_file=query_file,data_file=data_file,fraction=0.3)
     
     # data_file = f"books_200M_uint64_unique"
     # query_file = f"books_200M_uint64_unique.4Mtable2.bin"

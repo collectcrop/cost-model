@@ -29,7 +29,6 @@
 
 using KeyType = uint64_t;
 #define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
 
 struct Record {
     uint64_t key;
@@ -109,7 +108,7 @@ template <size_t Epsilon>
 BenchmarkResult benchmark_mt(std::vector<KeyType> data,
                              std::vector<KeyType> queries,
                              const std::string &filename,
-                             pgm::CachePolicy s,
+                             falcon::CachePolicy s,
                              int num_threads,
                              size_t memory_budget_bytes) {
     // 1) 构建 PGM
@@ -123,12 +122,12 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     }
 
     // 3) 策略映射
-    pgm::CachePolicy policy = pgm::CachePolicy::NONE;
+    falcon::CachePolicy policy = falcon::CachePolicy::NONE;
     switch (s) {
-        case pgm::CachePolicy::LRU:  policy = pgm::CachePolicy::LRU;  break;
-        case pgm::CachePolicy::FIFO: policy = pgm::CachePolicy::FIFO; break;
-        case pgm::CachePolicy::LFU:  policy = pgm::CachePolicy::LFU;  break;
-        case pgm::CachePolicy::NONE: policy = pgm::CachePolicy::NONE; break;
+        case falcon::CachePolicy::LRU:  policy = falcon::CachePolicy::LRU;  break;
+        case falcon::CachePolicy::FIFO: policy = falcon::CachePolicy::FIFO; break;
+        case falcon::CachePolicy::LFU:  policy = falcon::CachePolicy::LFU;  break;
+        case falcon::CachePolicy::NONE: policy = falcon::CachePolicy::NONE; break;
     }
 
     int workers = g_falcon_workers.load(std::memory_order_relaxed);
@@ -137,13 +136,13 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     falcon::FalconPGM<uint64_t, Epsilon, /*EpsRec*/ 4> F(
         index,
         data_fd,
-        pgm::IO_URING,
+        falcon::IO_URING,
         /*memory_budget_bytes=*/ memory_budget_bytes,
         /*cache_policy=*/ policy,
         /*cache_shards=*/ 1,
         /*max_pages_per_batch=*/ 256,
         /*max_wait_us=*/ 50,
-        /*workers=*/ workers            // std::min(std::max(num_threads / 8, 1), 16)
+        /*workers=*/ workers          
     );
 
     // 5) 多线程执行（原逻辑不变）
@@ -234,8 +233,8 @@ int main(int argc, char **argv) {
     // 6) 拼接路径
     std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
     std::string query_fname  = dataset_basename + ".query.bin";   // e.g. books_200M_uint64_unique.query.bin
-    std::string file         = DATASETS + filename;
-    std::string query_file   = DATASETS + query_fname;
+    std::string file         = falcon::DATASETS + filename;
+    std::string query_file   = falcon::DATASETS + query_fname;
 
     // 7) 加载数据（num_keys 必须匹配）
     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, num_keys);
@@ -251,7 +250,6 @@ int main(int argc, char **argv) {
     csv << "baseline,producers,workers,latency_ns,wall_time_ns,avg_IOs,data_IO_time_ns,hit_ratio,index_time_ns,cache_time_ns\n";
     csv << std::fixed << std::setprecision(6);
 
-    // 9) 多线程实验
     std::vector<int> P_list = {1, 2, 4, 8, 16, 32, 64, 128};
     std::vector<int> W_list = {1, 2, 4, 8, 16, 32, 64, 128};
 
@@ -263,7 +261,7 @@ int main(int argc, char **argv) {
                 int producers = P;
 
                 auto result = benchmark_mt<16>(data, queries, file,
-                                            pgm::CachePolicy::NONE,
+                                            falcon::CachePolicy::NONE,
                                             producers,
                                             memory_budget_bytes);
 

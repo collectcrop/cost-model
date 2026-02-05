@@ -5,6 +5,7 @@
 #include "cache/NullCache.hpp" 
 #include <thread>
 #include <algorithm>
+#include <iostream>
 
 namespace falcon {
 
@@ -36,7 +37,8 @@ MakeShardedCache(CachePolicy policy,
         case CachePolicy::LRU:  return std::make_unique<ShardedLRUCache>(cap_pages, shards);
         case CachePolicy::LFU:  return std::make_unique<ShardedLFUCache>(cap_pages, shards);
         case CachePolicy::NONE: return std::make_unique<NullCache>();
-        default:                return std::make_unique<ShardedLRUCache>(cap_pages, shards);
+        default:                std::cout << "Invalid cache policy" << std::endl;
+                                return std::make_unique<NullCache>();
     }
 }
 

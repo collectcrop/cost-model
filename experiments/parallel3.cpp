@@ -107,7 +107,7 @@ template <size_t Epsilon>
 BenchmarkResult benchmark_mt(std::vector<KeyType> data,
                              std::vector<KeyType> queries,
                              std::string filename,
-                             pgm::CachePolicy s,
+                             falcon::CachePolicy s,
                              int num_threads,
                              size_t M,
                              size_t batch_size = 128) {
@@ -138,7 +138,7 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
         /*cache_shards=*/ 1,                
         /*max_pages_per_batch=*/ 256,       
         /*max_wait_us=*/ 50,                
-        /*workers=*/ std::min(std::max(num_threads/8, 1),16)   
+        /*workers=*/ std::max(num_threads/16, 2) 
     );
 
     // 5) 多线程提交查询（每线程用批量 futures）
@@ -203,7 +203,7 @@ int main() {
     csv << std::fixed << std::setprecision(6);
     uint64_t threads = 64;
     size_t epsilon = 16;
-    pgm::CachePolicy s = pgm::CachePolicy::LRU;
+    falcon::CachePolicy s = falcon::CachePolicy::LRU;
     for (size_t batch : {1,2,4,8,16,32,64,128,256,512,1024,2048,4096}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64,128
         BenchmarkResult result;
         const size_t M = MemoryBudget - 16*n/(2*epsilon);

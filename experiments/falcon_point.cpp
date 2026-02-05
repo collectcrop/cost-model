@@ -27,7 +27,6 @@
 
 using KeyType = uint64_t;
 #define DIRECTORY "/mnt/home/zwshi/learned-index/cost-model/experiments/"
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
 
 struct Record {
     uint64_t key;
@@ -107,7 +106,7 @@ template <size_t Epsilon>
 BenchmarkResult benchmark_mt(std::vector<KeyType> data,
                              std::vector<KeyType> queries,
                              std::string filename,
-                             pgm::CachePolicy s,
+                             falcon::CachePolicy s,
                              int num_threads,
                              size_t M,
                              size_t batch_size = 128) {
@@ -119,11 +118,11 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     if (data_fd < 0) { perror("open data"); std::exit(1); }
 
     // 3) 策略映射
-    pgm::CachePolicy policy = pgm::CachePolicy::NONE;
+    falcon::CachePolicy policy = falcon::CachePolicy::NONE;
     switch (s) {
-        case pgm::CachePolicy::LRU:  policy = pgm::CachePolicy::LRU;  break;
-        case pgm::CachePolicy::FIFO: policy = pgm::CachePolicy::FIFO; break;
-        case pgm::CachePolicy::LFU:  policy = pgm::CachePolicy::LFU;  break;
+        case falcon::CachePolicy::LRU:  policy = falcon::CachePolicy::LRU;  break;
+        case falcon::CachePolicy::FIFO: policy = falcon::CachePolicy::FIFO; break;
+        case falcon::CachePolicy::LFU:  policy = falcon::CachePolicy::LFU;  break;
     }
 
     // 4) 构建 FALCON 引擎
@@ -132,13 +131,13 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     falcon::FalconPGM<uint64_t, Epsilon, /*EpsRec*/ 4> F(
         index,
         data_fd,
-        pgm::IO_URING,
+        falcon::IO_URING,
         /*memory_budget_bytes=*/ M,
         /*cache_policy=*/ policy,
         /*cache_shards=*/ 1,                
         /*max_pages_per_batch=*/ 256,       
         /*max_wait_us=*/ 50,                
-        /*workers=*/ std::min(std::max(num_threads/8, 1),16)   
+        /*workers=*/ std::max(num_threads/16, 1)   
     );
 
     // 5) 多线程提交查询（每线程用批量 futures）
@@ -152,6 +151,9 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
     const size_t Q = queries.size();
     LatencyRecorder* latency = new LatencyRecorder(Q);
     auto start_all = timer::now();
+    std::sort(queries.begin(), queries.end());
+    // auto test = timer::now();
+    // std::cout << "sort time: " << std::chrono::duration_cast<std::chrono::nanoseconds>(test - start_all).count() << std::endl;
     for (int t = 0; t < num_threads; t++) {
         size_t begin = t * per_thread;
         size_t end   = (t == num_threads - 1) ? queries.size() : (t + 1) * per_thread;
@@ -210,9 +212,9 @@ int main(int argc, char **argv) {
     }
 
     std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
-    std::string query_fname  = dataset_basename + ".1Mtable3.bin";  
-    std::string file         = DATASETS + filename;
-    std::string query_file   = DATASETS + query_fname;
+    std::string query_fname  = dataset_basename + ".1Mtable1.bin";  
+    std::string file         = falcon::DATASETS + filename;
+    std::string query_file   = falcon::DATASETS + query_fname;
 
     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, num_keys);
     std::vector<KeyType> queries = load_queries_pgm_safe<KeyType>(query_file);
@@ -226,15 +228,16 @@ int main(int argc, char **argv) {
     << "IO_fraction,"<< "mem_fraction,"<< "cache_hit_ratio\n";
     csv << std::fixed << std::setprecision(6);
     uint64_t threads = 1;
-    pgm::CachePolicy s = pgm::CachePolicy::LRU;
+    falcon::CachePolicy s = falcon::CachePolicy::LRU;
     for (int i=0;i<repeats;i++){
         size_t epsilon = 16;
         BenchmarkResult result;
-        if (MemoryBudget<16*num_keys/(2*epsilon)){
-            std::cout << "Memory budget too small for ε=" << epsilon << ", skipping.\n";
-            continue;
-        }
-        const size_t M = MemoryBudget - 16*num_keys/(2*epsilon);
+        // if (MemoryBudget<16*num_keys/(2*epsilon)){
+        //     std::cout << "Memory budget too small for ε=" << epsilon << ", skipping.\n";
+        //     continue;
+        // }
+        // const size_t M = MemoryBudget - 16*num_keys/(2*epsilon);
+        const size_t M = MemoryBudget;
         result = benchmark_mt<16>(data, queries, file, s, threads, M);
         
         double total_time_s   = result.total_time / 1e9;

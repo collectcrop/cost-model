@@ -14,7 +14,7 @@
 
 using Key = uint64_t;
 using Clock = std::chrono::high_resolution_clock;
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
+// #define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
 
 struct ProbeSpec {
     // 0=point, 1=range
@@ -141,11 +141,11 @@ template <size_t EPS>
 static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（已排序）
                              const std::string& datafile_B,        // B 的数据文件（与索引对齐的记录文件）
                              const std::vector<ProbeSpec>& specs,  // A 的探针描述
-                             const std::vector<Key>& queries,      // A 的探针序列（点或区间端点）
+                             std::vector<Key>& queries,      // A 的探针序列（点或区间端点）
                              int threads,
                              size_t mem_budget_bytes,
-                             pgm::CachePolicy policy,
-                             pgm::IOInterface io_iface,
+                             falcon::CachePolicy policy,
+                             falcon::IOInterfaceType io_iface,
                              bool use_odirect) {
     // 1) 构建 PGM 索引（内存）
     pgm::PGMIndex<Key, EPS> pgm_idx(build_keys);
@@ -166,11 +166,12 @@ static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（�
         /*cache_shards=*/ 1,
         /*max_pages_per_batch=*/ 256,
         /*max_wait_us=*/ 50,
-        /*workers=*/ std::min(std::max(threads/8, 1), 16)
+        /*workers=*/ std::max(threads/16, 1)
     );
 
     // 4) 多线程探针（把 specs 分片；queries 顺序按 specs->len 前缀和切）
     auto t0 = Clock::now();
+    sort(queries.begin(), queries.end());
     std::atomic<uint64_t> matched_total{0};
     std::vector<std::thread> ths;
     ths.reserve(threads);
@@ -183,12 +184,15 @@ static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（�
     for (auto& th : ths) th.join();
     auto t1 = Clock::now();
 
-    // 5) 统计
     auto st = engine.stats();
+    double hit_ratio = 0.0;
+    auto hm = st.cache_hits + st.cache_misses;
+    if (hm) hit_ratio = double(st.cache_hits) / double(hm);
+
     Stats s;
     s.wall_ns       = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
     s.avg_latency_ns = double(s.wall_ns) / std::max<size_t>(1, queries.size());
-    s.hit_ratio     = (st.cache_hits + st.cache_misses) ? double(st.cache_hits) / double(st.cache_hits + st.cache_misses) : 0.0;
+    s.hit_ratio     = hit_ratio;
     s.logical_ios  = st.logical_ios;
     s.io_ns         = st.io_ns;
     s.height        = pgm_idx.height();
@@ -209,11 +213,11 @@ static Stats run_join_falcon(const std::vector<Key>& build_keys,   // B 表（�
 // }
 
 int main(int argc, char** argv) {
-    std::string build_file = std::string(DATASETS) + "books_200M_uint64_unique";         
+    std::string build_file = falcon::DATASETS + std::string("books_200M_uint64_unique");         
     std::string probe_bin, probe_par, probe_bitmap; 
-    probe_bin = std::string(DATASETS) + "books_200M_uint64_unique.4Mtable2.bin";
-    probe_par = std::string(DATASETS) + "books_200M_uint64_unique.4Mtable2.par";
-    probe_bitmap = std::string(DATASETS) + "books_200M_uint64_unique.4Mtable2.bitmap";
+    probe_bin = falcon::DATASETS + std::string("books_200M_uint64_unique.1Mtable5.bin");
+    probe_par = falcon::DATASETS + std::string("books_200M_uint64_unique.1Mtable5.par");
+    probe_bitmap = falcon::DATASETS + std::string("books_200M_uint64_unique.1Mtable5.bitmap");
     std::string datafile_B = build_file;         
     int threads = 1;
     // size_t epsilon = 16;
@@ -221,7 +225,7 @@ int main(int argc, char** argv) {
     std::string policy_str = "LRU";
     std::string io_str = "uring";
     bool use_odirect = true;
-    int trials = 3;
+    int trials = 10;
     std::string csv_out = "books-200M-join.csv";
 
     // 加载 B 的 key（注意：需与 datafile_B 中记录顺序一致）
@@ -239,18 +243,19 @@ int main(int argc, char** argv) {
         throw std::runtime_error("probe_bin size mismatch with par/bitmap");
 
     // 解析策略/接口
-    pgm::CachePolicy policy = pgm::CachePolicy::LRU;
-    if (policy_str=="FIFO") policy = pgm::CachePolicy::FIFO;
-    else if (policy_str=="LFU") policy = pgm::CachePolicy::LFU;
+    falcon::CachePolicy policy = falcon::CachePolicy::NONE;
+    if (policy_str=="LRU") policy = falcon::CachePolicy::LRU;
+    else if (policy_str=="FIFO") policy = falcon::CachePolicy::FIFO;
+    else if (policy_str=="LFU") policy = falcon::CachePolicy::LFU;
 
-    pgm::IOInterface iface = pgm::IO_URING;
-    if (io_str=="psync") iface = pgm::PSYNC;
-    else if (io_str=="libaio") iface = pgm::LIBAIO;
-    else iface = pgm::IO_URING;
+    falcon::IOInterfaceType iface = falcon::IO_URING;
+    if (io_str=="psync") iface = falcon::PSYNC;
+    else if (io_str=="libaio") iface = falcon::LIBAIO;
+    else iface = falcon::IO_URING;
 
     // CSV
     std::ofstream ofs(csv_out, std::ios::out | std::ios::trunc);
-    ofs << "threads,epsilon,avg_latency_ns,total_wall_time_s,avg_IOs,IO_time_s,hit_rates\n";
+    ofs << "threads,epsilon,avg_latency_ns,total_wall_time_s,avg_IOs,IO_time_s\n";
     ofs << std::fixed << std::setprecision(6);
 
     auto bench_once = [&](auto const_tag){
@@ -278,12 +283,11 @@ int main(int argc, char** argv) {
                 << s.avg_latency_ns << "," 
                 << (s.wall_ns/1e9) << "," 
                 << s.logical_ios << "," 
-                << (s.io_ns/1e9) << ","
-                << s.hit_ratio << "\n";
+                << (s.io_ns/1e9) << "\n";
             ofs.flush();
         }
     };
-    for (auto epsilon : {2,4,6,10,12,14,16,18,20,24,32,48,64}){      // 8, 12, 16, 20, 24, 32, 48, 64, 128
+    for (auto epsilon : {16}){      // 2,4,6,10,12,14,16,18,20,24,32,48,64,128
         switch (epsilon) {
             case 2:   bench_once(std::integral_constant<size_t,2>{}); break;
             case 4:   bench_once(std::integral_constant<size_t,4>{}); break;

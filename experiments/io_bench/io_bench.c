@@ -40,9 +40,61 @@ void *worker_pread(void *arg) {
     return NULL;
 }
 
+// void *worker_libaio(void *arg) {
+//     thread_arg_t *t = (thread_arg_t *)arg;
+//     io_context_t ctx = 0;
+//     if (io_setup(t->qdepth, &ctx) < 0) {
+//         perror("io_setup");
+//         return NULL;
+//     }
+
+//     struct iocb **cbs = (struct iocb**)malloc(sizeof(struct iocb *) * t->qdepth);
+//     struct io_event *events = (struct io_event*)calloc(t->qdepth, sizeof(struct io_event));
+//     char **bufs = malloc(sizeof(char *) * t->qdepth);
+
+//     for (int i = 0; i < t->qdepth; i++) {
+//         bufs[i] = (char*)aligned_alloc(4096, BlockSize);
+//         cbs[i] = (struct iocb*)calloc(1, sizeof(struct iocb));
+//     }
+
+//     int submitted = 0, completed = 0;
+//     while (completed < t->ops) {
+//         // 提交新请求
+//         while (submitted - completed < t->qdepth && submitted < t->ops) {
+//             off_t offset = ((off_t)rand() % (FILE_SIZE / BlockSize)) * BlockSize;
+//             io_prep_pread(cbs[submitted % t->qdepth], t->fd, bufs[submitted % t->qdepth],
+//                           BlockSize, offset);
+//             cbs[submitted % t->qdepth]->data = bufs[submitted % t->qdepth];
+
+//             struct iocb *list[1] = { cbs[submitted % t->qdepth] };
+//             int ret;
+//             do {
+//                 ret = io_submit(ctx, 1, list);
+//             } while (ret < 0 && errno == EAGAIN); // 避免提交失败直接丢
+
+//             if (ret == 1)
+//                 submitted++;
+//         }
+
+//         // 回收完成事件
+//         int got = io_getevents(ctx, 0, t->qdepth, events, NULL);
+//         completed += got;
+//     }
+
+//     for (int i = 0; i < t->qdepth; i++) {
+//         free(bufs[i]);
+//         free(cbs[i]);
+//     }
+//     free(bufs);
+//     free(cbs);
+//     free(events);
+//     io_destroy(ctx);
+//     return NULL;
+// }
 void *worker_libaio(void *arg) {
     thread_arg_t *t = (thread_arg_t *)arg;
     io_context_t ctx = 0;
+
     if (io_setup(t->qdepth, &ctx) < 0) {
         perror("io_setup");
         return NULL;
@@ -50,47 +102,123 @@ void *worker_libaio(void *arg) {
 
     struct iocb **cbs = (struct iocb**)malloc(sizeof(struct iocb *) * t->qdepth);
     struct io_event *events = (struct io_event*)calloc(t->qdepth, sizeof(struct io_event));
-    char **bufs = malloc(sizeof(char *) * t->qdepth);
+    char **bufs = (char**)malloc(sizeof(char *) * t->qdepth);
+
+    if (!cbs || !events || !bufs) {
+        perror("malloc/calloc");
+        io_destroy(ctx);
+        return NULL;
+    }
 
     for (int i = 0; i < t->qdepth; i++) {
         bufs[i] = (char*)aligned_alloc(4096, BlockSize);
-        cbs[i] = (struct iocb*)calloc(1, sizeof(struct iocb));
+        cbs[i]  = (struct iocb*)calloc(1, sizeof(struct iocb));
+        if (!bufs[i] || !cbs[i]) {
+            perror("aligned_alloc/calloc");
+            // cleanup
+            for (int j = 0; j <= i; j++) {
+                if (bufs[j]) free(bufs[j]);
+                if (cbs[j]) free(cbs[j]);
+            }
+            free(bufs); free(cbs); free(events);
+            io_destroy(ctx);
+            return NULL;
+        }
+    }
+
+    // 每次最多提交多少个（<= qdepth）。你也可以设成固定 32/64 做实验对比
+    const int MAX_BATCH = t->qdepth;
+
+    struct iocb **submit_list = (struct iocb**)malloc(sizeof(struct iocb*) * MAX_BATCH);
+    if (!submit_list) {
+        perror("malloc submit_list");
+        for (int i = 0; i < t->qdepth; i++) { free(bufs[i]); free(cbs[i]); }
+        free(bufs); free(cbs); free(events);
+        io_destroy(ctx);
+        return NULL;
     }
 
     int submitted = 0, completed = 0;
+
     while (completed < t->ops) {
-        // 提交新请求
-        while (submitted - completed < t->qdepth && submitted < t->ops) {
-            off_t offset = ((off_t)rand() % (FILE_SIZE / BlockSize)) * BlockSize;
-            io_prep_pread(cbs[submitted % t->qdepth], t->fd, bufs[submitted % t->qdepth],
-                          BlockSize, offset);
-            cbs[submitted % t->qdepth]->data = bufs[submitted % t->qdepth];
+        int inflight = submitted - completed;
 
-            struct iocb *list[1] = { cbs[submitted % t->qdepth] };
-            int ret;
-            do {
-                ret = io_submit(ctx, 1, list);
-            } while (ret < 0 && errno == EAGAIN); // 避免提交失败直接丢
+        // ========== 1) 尽量 batch 提交，维持队列“接近满” ==========
+        while (inflight < t->qdepth && submitted < t->ops) {
+            int free_slots = t->qdepth - inflight;
+            int remain_ops = t->ops - submitted;
+            int k = free_slots < remain_ops ? free_slots : remain_ops;
+            if (k > MAX_BATCH) k = MAX_BATCH;
+            if (k <= 0) break;
 
-            if (ret == 1)
-                submitted++;
+            // 准备 k 个 iocb*
+            for (int i = 0; i < k; i++) {
+                int idx = (submitted + i) % t->qdepth;
+                off_t offset = ((off_t)rand() % (FILE_SIZE / BlockSize)) * BlockSize;
+
+                io_prep_pread(cbs[idx], t->fd, bufs[idx], BlockSize, offset);
+                cbs[idx]->data = bufs[idx];              // 可选：用于识别/校验
+                submit_list[i] = cbs[idx];
+            }
+
+            // batch 提交：注意可能“部分提交”
+            int left = k;
+            int pos  = 0;
+            while (left > 0) {
+                int ret;
+                do {
+                    ret = io_submit(ctx, left, &submit_list[pos]);
+                } while (ret < 0 && errno == EAGAIN);
+
+                if (ret < 0) {
+                    // 真正错误：直接退出（或你也可以 continue/统计错误）
+                    perror("io_submit");
+                    goto out;
+                }
+
+                // ret 可能小于 left：部分提交
+                pos  += ret;
+                left -= ret;
+            }
+
+            submitted += k;
+            inflight  += k;
         }
 
-        // 回收完成事件
-        int got = io_getevents(ctx, 0, t->qdepth, events, NULL);
+        // ========== 2) 回收完成事件（避免 min_nr=0 空转） ==========
+        int inflight_now = submitted - completed;
+        if (inflight_now <= 0) continue;
+
+        // 至少等 1 个完成，最多回收 inflight_now（或 qdepth）
+        int max_nr = inflight_now < t->qdepth ? inflight_now : t->qdepth;
+
+        int got;
+        do {
+            got = io_getevents(ctx, /*min_nr=*/1, /*max_nr=*/max_nr, events, /*timeout=*/NULL);
+        } while (got < 0 && errno == EINTR);
+
+        if (got < 0) {
+            perror("io_getevents");
+            goto out;
+        }
+
         completed += got;
+        // 你如果想做数据校验，可用 events[i].data / events[i].obj 来定位 buffer/iocb
     }
 
+out:
     for (int i = 0; i < t->qdepth; i++) {
         free(bufs[i]);
         free(cbs[i]);
     }
+    free(submit_list);
     free(bufs);
     free(cbs);
     free(events);
     io_destroy(ctx);
     return NULL;
 }
+
 
 void *worker_io_uring(void *arg) {
     thread_arg_t *t = (thread_arg_t *)arg;

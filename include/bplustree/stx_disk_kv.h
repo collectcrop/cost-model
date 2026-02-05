@@ -5,6 +5,7 @@
 #include <shared_mutex>
 #include <unistd.h>
 #include <functional> 
+#include "utils/include.hpp"
 #include "btree.h"
 
 class StxDiskKV {
@@ -43,7 +44,7 @@ public:
   ssize_t get_record(Key k, void* buf, size_t len) const;
 
   // 批量构建（keys 与 offsets 等长，通常从已知数据源导入）
-  void bulk_build(const Key* keys, const Offset* offs, size_t n);
+  void bulk_build(std::vector<KeyType> keys, const Offset* offs, size_t n);
 
   // 索引大小
   size_t size() const;

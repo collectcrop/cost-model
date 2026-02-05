@@ -1,7 +1,7 @@
 import numpy as np
 import random
 import math
-DATASETS_DIRECTORY = "/mnt/home/zwshi/Datasets/SOSD/"
+DATASETS_DIRECTORY = "/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/"
 
 def generate_realistic_queries_from_data(keys, num_queries=100000, seed=42):
     np.random.seed(seed)
@@ -241,8 +241,6 @@ def sample_unique_mixture(
         raise ValueError("No candidates generated; check ratios")
 
     cand = np.concatenate(cand_parts).astype(np.uint64, copy=False)
-
-    # 打乱候选顺序，使“按顺序去重”不过度偏向某一类候选
     rng.shuffle(cand)
 
     # ---- 单次按顺序去重，取前 k 个 ----
@@ -513,19 +511,19 @@ def main():
     
     # sizeList = [1e7,2e7,3e7,5e7,7e7,9e7,1e8,2e8]
     # datasets = ["fb","books","osm_cellids","wiki_ts"]
-    # sizeList = [2e8]
-    # datasets = ["books"]
-    # """ point """
-    # num_queries = 1000       #1000000
-    # for dataset in datasets:
-    #     for size in sizeList:
-    #         print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
-    #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
-    #         keys = raw
-    #         print(f"[*] Loaded {len(keys)} keys.")
-    #         queries = generate_realistic_queries_from_data(keys,num_queries)
-    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.1Kquery.bin")
-    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
+    sizeList = [2e8]
+    datasets = ["books"]
+    """ point """
+    num_queries = 1000000       #1000000
+    for dataset in datasets:
+        for size in sizeList:
+            print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
+            raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique", dtype=np.uint64)
+            keys = raw
+            print(f"[*] Loaded {len(keys)} keys.")
+            queries = generate_realistic_queries_from_data(keys,num_queries)
+            queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin")
+            print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.query.bin successfully!")
     
     """ range """
     # num_queries = 4000000
@@ -538,33 +536,33 @@ def main():
     # queries.tofile(f"{DATASETS_DIRECTORY}range_query_{int(num_queries/1e6)}M_uu.bin")
     # print(f"[+] save queries to {DATASETS_DIRECTORY}range_query_{int(num_queries/1e6)}M_uu.bin successfully!")
     
-    datasets = ["fb","books","osm_cellids","wiki_ts"]
-    size = 1e7
-    num_queries = 1000000
-    for dataset in datasets:
-        raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique",
-                        dtype=np.uint64)
-        keys = raw        # SOSD 已排序 key
+    # datasets = ["fb"]
+    # sizeList = [1e7,2e7,5e7,7e7,1e8]
+    # num_queries = 4000000
+    # for dataset in datasets:
+    #     for size in sizeList:
+    #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique",
+    #                         dtype=np.uint64)
+    #         keys = raw        # SOSD 已排序 key
 
-        queries = generate_range_queries_from_data(
-            keys,
-            num_queries,
-            start_dist='uniform',      # 或 'normal'
-            length_dist='uniform', # 或 'uniform'
-            max_length_keys=5000,      # 这里是“key 个数”的最大跨度
-            exp_scale=100,
-            seed=42
-        )
+    #         queries = generate_range_queries_from_data(
+    #             keys,
+    #             num_queries,
+    #             start_dist='uniform',      # 或 'normal'
+    #             length_dist='uniform', # 或 'uniform'
+    #             max_length_keys=5000,      # 这里是“key 个数”的最大跨度
+    #             exp_scale=100,
+    #             seed=42
+    #         )
 
-        # 保存为 [lo0,hi0, lo1,hi1, ...] 的 uint64 流
-        out_path = f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.range.bin"
-        queries.tofile(out_path)
-        print(f"[+] save range queries to {out_path} successfully!")
+    #         out_path = f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mrange.bin"
+    #         queries.tofile(out_path)
+    #         print(f"[+] save range queries to {out_path} successfully!")
     
     """ join """
     # sizeList = [2e8]
     # datasets = ["books"]
-    # num_queries = 4000000
+    # num_queries = 1000000
     # for dataset in datasets:
     #     for size in sizeList:
     #         print(f"[*] Generate queries for {dataset}_{int(size/1e6)}M_uint64_unique")
@@ -572,10 +570,10 @@ def main():
     #         keys = raw
     #         print(f"[*] Loaded {len(keys)} keys.")
     #         # queries = sample_unique_mixture(keys,num_queries)
-    #         queries = sample_unique_mixture(keys,num_queries,hotpot_ratio=0,zipf_ratio=1,oversample=100)
+    #         queries = sample_unique_mixture(keys,num_queries,hotpot_ratio=0.2,zipf_ratio=0.2,oversample=100,return_sorted=False)
     #         print(f"[*] Loaded {len(queries)} queries.")
-    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable2.bin")
-    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable2.bin successfully!")
+    #         queries.tofile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable5.bin")
+    #         print(f"[+] save queries to {DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique.{int(num_queries/1e6)}Mtable5.bin successfully!")
     
     # datasets = ["books"]
     # num_queries = 100000
@@ -593,7 +591,7 @@ def main():
     """ partition join"""
     # page_size = 4096
     # epsilon = 16
-    # queryfile = "books_200M_uint64_unique.4Mtable2.bin"
+    # queryfile = "books_200M_uint64_unique.1Mtable5.bin"
     # dataset = "books_200M_uint64_unique"
     # raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}", dtype=np.uint64)
     # keys = raw

@@ -139,7 +139,7 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
         /*cache_shards=*/ 1,                
         /*max_pages_per_batch=*/ 256,       
         /*max_wait_us=*/ 50,                
-        /*workers=*/ std::min(std::max(num_threads/8, 1),16)   
+        /*workers=*/ std::max(num_threads/16, 2) 
     );
 
     // 5) 多线程提交查询（每线程用批量 futures）
@@ -210,10 +210,10 @@ int main(int argc, char **argv) {
         if (repeats <= 0) repeats = 1;
     }
 
-    // std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
+    std::string filename     = dataset_basename;                  // e.g. books_200M_uint64_unique
     std::string query_fname  = dataset_basename + ".query.bin";   // e.g. books_200M_uint64_unique.query.bin
-    std::string filename     = dataset_basename;                  
-    // std::string query_fname  = dataset_basename + ".1Mtable.bin";   
+    // std::string filename     = dataset_basename;                  
+    // std::string query_fname  = dataset_basename + ".1Mtable1.bin";   
     std::string file         = falcon::DATASETS + filename;
     std::string query_file   = falcon::DATASETS + query_fname;
 
@@ -221,8 +221,8 @@ int main(int argc, char **argv) {
     std::vector<KeyType> all_queries = load_queries_pgm_safe<KeyType>(query_file);
 
     size_t N = all_queries.size();
-    size_t eval_begin = static_cast<size_t>(0.3 * N);  // 30% profiling，70% evaluation
-
+    // size_t eval_begin = static_cast<size_t>(0.3 * N);  // 30% profiling，70% evaluation
+    size_t eval_begin = 0;
     std::vector<KeyType> queries(
         all_queries.begin() + eval_begin,
         all_queries.end()
@@ -241,9 +241,9 @@ int main(int argc, char **argv) {
     << "IO_fraction,"<< "mem_fraction,"<< "cache_hit_ratio\n";
     csv << std::fixed << std::setprecision(6);
     uint64_t threads = 1;
-    falcon::CachePolicy s = falcon::CachePolicy::LRU;
+    falcon::CachePolicy s = falcon::CachePolicy::NONE;
     for (int i=0;i<repeats;i++){
-        for (size_t epsilon : {1024,4096}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64
+        for (size_t epsilon : {16}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64
             BenchmarkResult result;
             if (MemoryBudget<16*num_keys/(2*epsilon)){
                 std::cout << "Memory budget too small for ε=" << epsilon << ", skipping.\n";

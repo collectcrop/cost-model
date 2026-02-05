@@ -1,10 +1,3 @@
-/*
- * This example shows how to index and query a vector of random integers with the PGM-index.
- * Compile with:
- *   g++ simple.cpp -std=c++17 -I../include -o simple
- * Run with:
- *   ./simple
- */
 #include <sched.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -88,7 +81,7 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 
     while (left < right) {
         size_t mid = left + (right - left) / 2;
-        const char* mid_ptr = buffer.data() + mid * pgm::RECORD_SIZE;
+        const char* mid_ptr = buffer.data() + mid * falcon::RECORD_SIZE;
         uint64_t mid_key = extract_key(mid_ptr);
 
         if (mid_key < target_key) {
@@ -100,7 +93,7 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
 
     // 检查 left 是否就是目标
     if (left < hi) {
-        const char* candidate = buffer.data() + left * pgm::RECORD_SIZE;
+        const char* candidate = buffer.data() + left * falcon::RECORD_SIZE;
         uint64_t candidate_key = extract_key(candidate);
         if (candidate_key == target_key) {
             return candidate; // 找到
@@ -110,7 +103,7 @@ const char* binary_search_record(const std::vector<char>& buffer, size_t lo, siz
     return nullptr; // 没找到
 }
 
-const bool binary_search_record(std::vector<pgm::Record> records, size_t lo, size_t hi, KeyType target_key){
+const bool binary_search_record(std::vector<falcon::Record> records, size_t lo, size_t hi, KeyType target_key){
     int64_t left = lo;
     int64_t right = hi;
     while (left <= right) {
@@ -129,8 +122,8 @@ const bool binary_search_record(std::vector<pgm::Record> records, size_t lo, siz
 
 template <size_t Epsilon, size_t M>
 BenchmarkResult benchmark(std::vector<KeyType> data,std::string query_file,std::string bitmap_file, 
-    std::string len_file, std::string filename, pgm::CacheStrategy s) {
-    pgm::PGMIndex<KeyType, Epsilon, M, pgm::CacheType::DATA> index(data,filename,s);
+    std::string len_file, std::string filename, falcon::CachePolicy s) {
+    pgm::PGMIndex<KeyType, Epsilon, M, falcon::CacheType::DATA> index(data,filename,s);
     std::vector<KeyType> queries = load_binary<KeyType>(query_file, false);
 
     auto t0 = timer::now();
@@ -146,8 +139,8 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::string query_file,std::
             for (int j=0;j<lengths[i];j++){
                 q = queries[cur++];
                 // std::cout << "point: " << q << std::endl;
-                auto range = index.search(q, pgm::ALL_IN_ONCE);
-                std::vector<pgm::Record> records = range.records;
+                auto range = index.search(q, falcon::ALL_IN_ONCE);
+                std::vector<falcon::Record> records = range.records;
                 size_t lo = range.lo;
                 size_t hi = range.hi;
                 const bool result = binary_search_record(records, lo, hi, q);
@@ -158,7 +151,7 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::string query_file,std::
             // std::cout << "range: " << lo << "-" << hi << std::endl;
             std::vector<KeyType> target(queries.begin() + cur,
                                 queries.begin() + cur + lengths[i]);
-            range = index.range_search(lo, hi, target, pgm::ALL_IN_ONCE);
+            range = index.range_search(lo, hi, target, falcon::ALL_IN_ONCE);
             cur += lengths[i];
             // std::cout << range.size() << std::endl;
         }
@@ -189,16 +182,16 @@ BenchmarkResult benchmark(std::vector<KeyType> data,std::string query_file,std::
     return result;
 }
 
-std::string mk_outfilename(pgm::CacheStrategy s,std::string dataset,size_t ds, size_t ms, std::string suffix=""){
+std::string mk_outfilename(falcon::CachePolicy s,std::string dataset,size_t ds, size_t ms, std::string suffix=""){
     std::string prefix;
     switch (s){
-        case pgm::CacheStrategy::LRU:
+        case falcon::CachePolicy::LRU:
             prefix = "LRU-";
             break;
-        case pgm::CacheStrategy::FIFO:
+        case falcon::CachePolicy::FIFO:
             prefix = "FIFO-";
             break;
-        case pgm::CacheStrategy::LFU:
+        case falcon::CachePolicy::LFU:
             prefix = "LFU-";
             break;
     }
@@ -228,11 +221,11 @@ int main() {
     const size_t MemoryBudget = 20*1024*1024;
 
     int trials = 10;
-    for (pgm::CacheStrategy s: {pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU}){     //pgm::CacheStrategy::LRU,pgm::CacheStrategy::FIFO,pgm::CacheStrategy::LFU
+    for (falcon::CachePolicy s: {falcon::CachePolicy::LRU,falcon::CachePolicy::FIFO,falcon::CachePolicy::LFU}){     //falcon::CachePolicy::LRU,falcon::CachePolicy::FIFO,falcon::CachePolicy::LFU
         std::ofstream ofs(mk_outfilename(s,dataset,20,MemoryBudget>>20,"-join.5"));
         ofs << "epsilon,avg_query_time_ns,avg_cache_hit_ratio,avg_index_cache_hit_ratio,data_IOs,total_time\n";
         for (int i=0;i<trials;i++){
-            BenchmarkResult result = benchmark<8, MemoryBudget>(data, query_file, bitmap_file, len_file, file, s);
+            BenchmarkResult result = benchmark<16, MemoryBudget>(data, query_file, bitmap_file, len_file, file, s);
 
             std::cout << "ε=" << result.epsilon
                     << ", time=" << result.time_ns << " ns"
