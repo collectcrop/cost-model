@@ -1,0 +1,168 @@
+\documentclass[11pt]{article}
+
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage[skip=1ex]{subcaption}
+\usepackage[skip=1ex]{caption}
+\usepackage{hyperref}
+\usepackage[capitalize,noabbrev]{cleveref}
+\usepackage[a4paper, margin=1in]{geometry}
+
+\newtheorem{theorem}{Theorem}[section]   
+\newtheorem{lemma}[theorem]{Lemma}       
+\newtheorem{definition}[theorem]{Definition} 
+\newtheorem{corollary}[theorem]{Corollary}   
+
+
+\begin{document}
+\title{FALCON: Extended Technical Report}
+
+\section{Detailed Theory Analysis}
+\begin{lemma}[Expected DAC for All-at-Once Fetching]\label{theorem:dac}
+If the predicted position lies in a page with a uniformly distributed offset, the expected number of I/Os with all-at-once strategy is
+\begin{equation}\label{eq:EDAC_for_all_in_once}
+\mathbb{E}[\text{DAC}] = 1 + \frac{2\varepsilon}{C_{\textnormal{ipp}}},
+\end{equation}
+where $C_{\textnormal{ipp}}$ represents the number of items per page.
+\end{lemma}
+\begin{proof}
+Denote the offset within the page of the predicted position by $s\sim U(0,C_{ipp}-1)$. The I/O needs to fetch the page that contains the predicted position and additional pages required to cover the left and right of the $\pm\varepsilon$ window:
+\begin{equation}
+    \mathbb{E}[\text{DAC}]
+    =\frac{1}{C_{\text{ipp}}}\sum_{s=0}^{C_{\text{ipp}}-1}
+    \left(
+    1+\Big\lceil \tfrac{\varepsilon-s}{C_{\text{ipp}}} \Big\rceil
+    +\Big\lceil \tfrac{\varepsilon-(C_{\text{ipp}}-1-s)}{C_{\text{ipp}}} \Big\rceil
+    \right).
+\end{equation}
+Rewrite $\varepsilon=\lambda\cdot C_{\text{ipp}}+r$ for some $\lambda\in\mathbb{N}$ and $0\le r<C_{\text{ipp}}$. 
+Then each ceiling term equals $q$ plus an indicator for crossing a page boundary, yielding
+\begin{equation}\label{eq:dac}
+    \mathbb{E}[\text{DAC}] = 1+2\lambda+\frac{2r}{C_{\text{ipp}}} = 1+\frac{2\varepsilon}{C_{\text{ipp}}}.
+\end{equation}
+\end{proof}
+
+
+\begin{lemma}
+(Expected Cost For One-By-One Fetching). If the predicted position lies in a page with a uniformly distributed offset, the expected number of I/Os under the one-by-one strategy is
+\begin{align}   \label{eq:EDAC_for_one_by_one}
+\mathbb{E}[\text{DAC}] = 1+\frac{\varepsilon}{C_{\text{ipp}}} 
+\end{align}
+\end{lemma}
+\begin{proof}
+Suppose the predicted position is at $\hat{y}$ and the true position $y$ is uniformly random over the entire search window $[\hat{y}-\varepsilon,\hat{y}+\varepsilon]$. Let X denote the distance between $y$ and the lower bound $\hat{y}-\varepsilon$, i.e.,
+$X \sim U(0,2\varepsilon)$.
+
+Let $k$ denote a uniformly distributed offset of the lower bound within a page. The expected I/O cost becomes:
+\begin{equation}    \label{eq:EDAC_for_one_by_one_step1}
+\begin{aligned}
+    \mathbb{E}(\text{DAC})&=1+\frac{1}{2\varepsilon+1}\sum_{x=0}^{2\varepsilon}\Big(\frac{1}{C_{\text{ipp}}}\sum_{k=0}^{C_{\text{ipp}}-1}\Big\lfloor\frac{k+x}{C_{\text{ipp}}}\Big\rfloor\Big) .
+\end{aligned}
+\end{equation}
+
+Let $x = q\cdot C_{\text{ipp}} + r_1, 0\le r_1<C_{\text{ipp}}$ ,
+\begin{equation}    \label{eq:EDAC_for_one_by_one_step2}
+\begin{aligned}
+    \frac{1}{C_{\text{ipp}}}\sum_{k=0}^{C_{\text{ipp}}-1}\Big\lfloor\frac{k+x}{C_{\text{ipp}}}\Big\rfloor  =q+\frac{r_1}{C_{\text{ipp}}} .
+\end{aligned}
+\end{equation}
+
+Let $2\varepsilon = M\cdot C_{\text{ipp}} + r_2, 0\le r_2<C_{\text{ipp}}$ ,
+
+\begin{equation}    \label{eq:EDAC_for_one_by_one_step3}
+\begin{aligned}
+    \sum_{x=0}^{2\varepsilon}q &= \sum_{m=0}^{M-1} m\cdot C_{\text{ipp}} \;+\; M\cdot (r_2+1)     \\
+    &= \frac{C_{\text{ipp}}\cdot M\cdot (M-1)}{2} + M\cdot (r_2+1) ,       
+\end{aligned}
+\end{equation}
+\begin{equation}    \label{eq:EDAC_for_one_by_one_step4}
+\begin{aligned}
+    \sum_{x=0}^{2\varepsilon}r_1 = M\cdot\frac{C_{\text{ipp}}\cdot(C_{\text{ipp}}-1)}{2} \;+\; \frac{r_2\cdot(r_2+1)}{2}     . 
+\end{aligned}
+\end{equation}
+Combining \cref{eq:EDAC_for_one_by_one_step1,eq:EDAC_for_one_by_one_step2,eq:EDAC_for_one_by_one_step3,eq:EDAC_for_one_by_one_step4}, we obtain:
+
+\begin{equation}    \label{eq:EDAC_for_one_by_one_step5}
+\begin{aligned}
+    \mathbb{E}[\text{DAC}] &= 1+\frac{1}{M\cdot C_{\text{ipp}}+r_2+1}\Big(\frac{(M\cdot C_{\text{ipp}}+r_2)(M\cdot C_{\text{ipp}}+r_2+1)}{2\cdot C_{\text{ipp}}}\Big)   \\
+    &=1+\frac{M\cdot C_{\text{ipp}}+r_2}{2\cdot C_{\text{ipp}}}  =1+\frac{\varepsilon}{C_{\text{ipp}}}
+\end{aligned}
+\end{equation}
+\end{proof}
+
+
+\begin{theorem}[Buffer Hit Rate for Sorted Queries] \label{thm:ordered_hit_rate}
+Let $\mathcal{K}=(k_1,\ldots,k_{|\mathcal K|})$ be an array of keys. 
+A query sequence $\mathcal{Q}$ is \textbf{sorted} w.r.t.\ $\mathcal{K}$ if it requests $k_i$ before $k_j$ for all $i<j$.  
+For any such query sequence $\mathcal{Q}$, suppose the buffer capacity $C$ satisfies
+\[
+    C\geq 1 + \lceil {2\varepsilon}/{C_{\textnormal{ipp}}} \rceil,
+\]
+where $C_\textnormal{ipp}$ is the number of items per page. 
+Then the cache hit rate equals $h=\frac{R-N}{R}$. 
+\end{theorem}
+
+\begin{proof}
+Let $(p_1,\ldots,p_R)$ be the page reference sequence generated by processing the $m$ queries, and partition it by queries:
+\[
+(p_1,\ldots,p_R)=\pi_1 \Vert \pi_2 \Vert \cdots \Vert \pi_m,
+\]
+where $\pi_t$ is the subsequence of page IDs referenced while processing query $t$. 
+For a learned-index-based engine, query $t$ touches exactly the pages in its last-mile window $W_t=[L_t,H_t]$, with $|W_t|\le 1 + \lceil \frac{2\varepsilon}{C_{\text{ipp}}} \rceil$.
+Let $\mathcal{P}$ be the set of distinct pages appearing in $(p_1,\ldots,p_R)$, and $|\mathcal{P}|=N$. Since queries are sorted, the windows move monotonically, i.e., $L_{t+1}\ge L_t$. Hence, between two consecutive queries, only pages newly entering the window can miss: pages in $W_{t+1}\cap W_t$ are still resident and therefore hit, while pages in $W_{t+1}\setminus W_t$ may incur misses.
+Because $C\ge C_\delta \ge |W_t|$ for all $t$, the entire window $W_t$ fits in cache during the processing of query $t$, so no page in $W_t$ can be evicted before $\pi_t$ finishes. By monotonicity of $L_t$, once a page is loaded it is either reused by subsequent overlapping windows (and thus hits) or never referenced again. Therefore, each distinct page in $\mathcal{P}$ incurs exactly one compulsory miss—on its first reference—and all later references are hits. The total number of misses is $N$, so the hit rate is
+\[
+h=\frac{R-N}{R},
+\]
+as claimed.
+\end{proof}
+
+\begin{corollary}[Sorted Order Maximizes Hit Rate]
+\label{cor:sorted_best}
+Given a multiset of queries $\mathcal{Q}$, the cache hit rate is maximized when $\mathcal{Q}$ is executed in sorted order.
+\end{corollary}
+
+\begin{proof}
+For an arbitrary ordering $\sigma$, let $\mathcal{P}$ be the set of distinct pages referenced by the resulting trace, and $|P|=N$. Let $b_\sigma(p)$ denote the number of cache misses (i.e., disk I/Os) incurred by page $p\in\mathcal{P}$. Since each distinct page must be brought into cache at least once, we have $b_\sigma(p)\ge 1$ for all $p\in\mathcal{P}$. Therefore,
+
+\begin{equation} \label{eq:miss_lower_bound_for_sorted}
+    \text{misses}(\sigma)
+    = \sum_{p\in\mathcal{P}} p_\sigma(q)
+    \;\ge\; \sum_{p\in\mathcal{P}} 1
+    \;=\; N
+    \;=\; \text{misses}(\text{sorted}).
+\end{equation}
+
+Under sorted order, we have $b_{\text{sorted}}(q)=1$ for all $q$ and the total number of misses attains this lower bound. It follows that
+$$
+\text{hits}(\sigma)=n-\text{misses}(\sigma)\le n-N,
+$$
+so the hit rate is maximized under sorted order.
+
+\end{proof}
+
+\section{Extended Experiments}
+\subsection{Worker Threads Configuration}
+In this section, we exhibit Point-query performance of FALCON under varying numbers of producer threads ($P$) and worker threads ($W$). The experiments are conducted on books dataset.
+\begin{figure}[h]
+\centering
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/heatmap_throughput_qps_0MB.pdf}
+        \caption{Throughput (KOPS) without page buffer.}
+        \label{fig:throughput_heatmap}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/heatmap_latency_ms_0MB.pdf}
+        \caption{Latency (ms) withour page buffer.}
+        \label{fig:latency_heatmap}
+    \end{subfigure}
+    \label{fig:worker_thread_configuration}
+\end{figure}
+
+
+\subsection{Performance of FALCON}
+
+\subsection{Evaluation of CAM}
+\end{document}
