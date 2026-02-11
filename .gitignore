@@ -18,5 +18,8 @@ experiments/io_bench/testfile
 *.blg
 *.out
 *.synctex.gz
+*.ipynb
 index
+test
 visualize/
+build/

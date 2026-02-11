@@ -1,12 +1,14 @@
 \documentclass[11pt]{article}
 
 \usepackage{amsmath,amssymb,amsthm}
+\usepackage{bbm}
 \usepackage{graphicx}
 \usepackage[skip=1ex]{subcaption}
 \usepackage[skip=1ex]{caption}
-\usepackage{hyperref}
+\usepackage[hidelinks]{hyperref}
 \usepackage[capitalize,noabbrev]{cleveref}
 \usepackage[a4paper, margin=1in]{geometry}
+\usepackage{float}
 
 \newtheorem{theorem}{Theorem}[section]   
 \newtheorem{lemma}[theorem]{Lemma}       
@@ -17,7 +19,7 @@
 \begin{document}
 \title{FALCON: Extended Technical Report}
 
-\section{Detailed Theory Analysis}
+\section{Detailed Theoretical Analysis}
 \begin{lemma}[Expected DAC for All-at-Once Fetching]\label{theorem:dac}
 If the predicted position lies in a page with a uniformly distributed offset, the expected number of I/Os with all-at-once strategy is
 \begin{equation}\label{eq:EDAC_for_all_in_once}
@@ -36,9 +38,12 @@ Denote the offset within the page of the predicted position by $s\sim U(0,C_{ipp
     \right).
 \end{equation}
 Rewrite $\varepsilon=\lambda\cdot C_{\text{ipp}}+r$ for some $\lambda\in\mathbb{N}$ and $0\le r<C_{\text{ipp}}$. 
-Then each ceiling term equals $q$ plus an indicator for crossing a page boundary, yielding
+Then we have
 \begin{equation}\label{eq:dac}
-    \mathbb{E}[\text{DAC}] = 1+2\lambda+\frac{2r}{C_{\text{ipp}}} = 1+\frac{2\varepsilon}{C_{\text{ipp}}}.
+\begin{aligned}
+    \mathbb{E}[\text{DAC}] &= \sum_{s=0}^{C_{\text{ipp}}-1} \frac{1}{C_{ipp}}\Big(1+(\lambda+\mathbbm{1}_{\{s<r\}})+(\lambda+\mathbbm{1}_{\{s>C_{ipp}-1-r\}}) \Big) \\
+    &= 1+2\lambda+\frac{2r}{C_{\text{ipp}}} = 1+\frac{2\varepsilon}{C_{\text{ipp}}}.
+\end{aligned}
 \end{equation}
 \end{proof}
 
@@ -141,22 +146,48 @@ so the hit rate is maximized under sorted order.
 
 \end{proof}
 
-\section{Extended Experiments}
+\section{Extended Experimental Evaluation}
 \subsection{Worker Threads Configuration}
-In this section, we exhibit Point-query performance of FALCON under varying numbers of producer threads ($P$) and worker threads ($W$). The experiments are conducted on books dataset.
-\begin{figure}[h]
+% In this section, we exhibit Point-query performance of FALCON under varying numbers of producer threads ($P$) and worker threads ($W$). The experiments are conducted on books dataset.
+\begin{figure}[H]
 \centering
     \begin{subfigure}[b]{0.48\linewidth}
         \centering
         \includegraphics[width=\linewidth]{figures/heatmap_throughput_qps_0MB.pdf}
         \caption{Throughput (KOPS) without page buffer.}
-        \label{fig:throughput_heatmap}
+        \label{fig:throughput_heatmap_0MB}
     \end{subfigure}
     \begin{subfigure}[b]{0.48\linewidth}
         \centering
         \includegraphics[width=\linewidth]{figures/heatmap_latency_ms_0MB.pdf}
-        \caption{Latency (ms) withour page buffer.}
-        \label{fig:latency_heatmap}
+        \caption{Latency (ms) without page buffer.}
+        \label{fig:latency_heatmap_0MB}
+    \end{subfigure}
+
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/heatmap_throughput_qps_100KB.pdf}
+        \caption{Throughput (KOPS) with 100KB page buffer.}
+        \label{fig:throughput_heatmap_100KB}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/heatmap_latency_ms_100KB.pdf}
+        \caption{Latency (ms) with 100KB page buffer.}
+        \label{fig:latency_heatmap_100KB}
+    \end{subfigure}
+
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/heatmap_throughput_qps_1MB.pdf}
+        \caption{Throughput (KOPS) with 1MB page buffer.}
+        \label{fig:throughput_heatmap_1MB}
+    \end{subfigure}
+    \begin{subfigure}[b]{0.48\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{figures/heatmap_latency_ms_1MB.pdf}
+        \caption{Latency (ms) with 1MB page buffer.}
+        \label{fig:latency_heatmap_1MB}
     \end{subfigure}
     \label{fig:worker_thread_configuration}
 \end{figure}

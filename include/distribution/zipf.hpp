@@ -1,3 +1,5 @@
+#ifndef ZIPF_HPP
+#define ZIPF_HPP
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -98,3 +100,5 @@ private:
     RealType                                 H_n;   ///< H(n)
     std::uniform_real_distribution<RealType> dist;  ///< [H(x_1), H(n)]
 };
+
+#endif

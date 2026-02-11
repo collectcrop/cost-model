@@ -10,16 +10,14 @@
 #include <algorithm>
 #include <unordered_map>
 
-#include "utils/include.hpp"
-#include "utils/utils.hpp"
-#include "IO/io_interface.hpp"
-#include "IO/SyncInterface.hpp"
-#include "IO/LibaioInterface.hpp"
-#include "IO/IOuringInterface.hpp"
-#include "queue/mpmc.hpp"
-#include "pgm/pgm_index.hpp"
-
-#include "cache/CacheInterface.hpp"  
+#include "FALCON/utils/include.hpp"
+#include "FALCON/utils/utils.hpp"
+#include "FALCON/IO/io_interface.hpp"
+#include "FALCON/IO/SyncInterface.hpp"
+#include "FALCON/IO/LibaioInterface.hpp"
+#include "FALCON/IO/IOuringInterface.hpp"
+#include "FALCON/pgm/pgm_index.hpp"
+#include "FALCON/cache/CacheInterface.hpp"  
 // using Clock = std::chrono::steady_clock;
 using Clock = std::chrono::high_resolution_clock;
 namespace falcon {
@@ -99,7 +97,6 @@ public:
 
 private:
     int fd_;
-    // std::unique_ptr<falcon::ICache> io_cache_;
     std::unique_ptr<falcon::IOInterface> io_;
     std::unique_ptr<falcon::ICache> cache_;
 
@@ -111,7 +108,6 @@ private:
     std::atomic<uint64_t> logical_misses_{0};
     std::condition_variable cv_;
     std::mutex cv_mtx_;
-    // MpmcQueue<Req> in_{1024*1024};
     Queue in_;
     std::thread th_;
 
@@ -136,7 +132,6 @@ private:
                 for (size_t p = r.page_lo; p <= r.page_hi; ++p) {
                     pages.push_back(p);
                     ++freq[p];
-                    // if (pages.size() >= max_pages_) break;
                 }
             }
             if (pages.empty()) {

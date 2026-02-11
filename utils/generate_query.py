@@ -130,59 +130,7 @@ def generate_range_queries_from_data(keys, num_queries,
     queries = np.stack([lo_keys, hi_keys], axis=1).astype(np.uint64)
     return queries
 
-# def generate_join_table_from_data(keys, num_queries=100000, seed=42,
-#                                   num_segments=5, active_segments=2, skew=0.5):
-#     """
-#     生成带空page gap的 join query:
-#       - 将 key space 划分为 num_segments 段
-#       - 仅在 active_segments 个段里生成 query
-#       - 用一个超参数 skew 控制各活跃段的“密度差异”（配额不均匀程度）
-#         * skew < 1: 更集中（某几个段非常密）
-#         * skew = 1: 中等不均
-#         * skew > 1: 更平均
-#     """
-#     np.random.seed(seed)
-#     random.seed(seed)
 
-#     n = len(keys)
-#     seg_size = n // num_segments
-#     queries = []
-
-#     # 选出若干活跃段
-#     active_idx = random.sample(range(num_segments), active_segments)
-
-#     # 用 Dirichlet(skew) 得到活跃段权重，再用多项分布分配查询总量
-#     w = np.random.dirichlet(alpha=[skew] * active_segments)
-#     quotas = np.random.multinomial(num_queries, w)
-
-#     for j, seg in enumerate(active_idx):
-#         start = seg * seg_size
-#         end = min((seg + 1) * seg_size, n)
-#         segment_keys = np.asarray(keys[start:end])  # 确保是 ndarray
-
-#         this_q = int(quotas[j])
-#         if this_q <= 0 or segment_keys.size == 0:
-#             continue
-
-#         # 段内仍保持“热点 + 均匀”两部分（可按需改比例）
-#         hotspot_ratio = 0.6
-#         hotspot_queries = int(this_q * hotspot_ratio)
-#         uniform_queries = this_q - hotspot_queries
-
-#         # hotspot: 取 segment 内的小范围 + Zipf 采样
-#         hotspot_size = max(1, int(0.05 * len(segment_keys)))
-#         base = random.randint(0, max(0, len(segment_keys) - hotspot_size))
-#         hot_indices = np.random.zipf(1.5, hotspot_queries)
-#         hot_indices = np.clip(hot_indices - 1, 0, hotspot_size - 1)  # zipf 从1起
-#         queries.extend(segment_keys[base + hot_indices])
-
-#         # uniform: 段内均匀采样；为保证配额，使用 replace=True
-#         if uniform_queries > 0:
-#             queries.extend(np.random.choice(segment_keys, size=uniform_queries, replace=True))
-
-#     # 返回升序
-#     join_keys = np.sort(np.array(queries, dtype=np.uint64))
-#     return join_keys
 def sample_unique_mixture(
     keys, k, seed=42,
     hotpot_ratio=0.4, zipf_ratio=0.3, uniform_ratio=0.3,
@@ -283,80 +231,6 @@ def sample_unique_mixture(
         rng.shuffle(chosen)
 
     return chosen
-
-    
-# def join_partition(keys, queries, page_size=4096, key_size=8,
-#                    lengths_file="", bitmap_file="", delta=37, H=0, epsilon=8):
-#     """
-#     Join-Partition Algorithm
-#     input:
-#       - keys: 大表升序 key (np.uint64)
-#       - queries: join 表升序 key (np.uint64)
-#       - page_size: SSD page 大小 (默认 4096B)
-#       - key_size: key 大小 (默认 8B)
-#     output:
-#       - lengths: 每个 partition 的 query 数
-#       - bitmap: 每个 partition 的策略 (0=point, 1=range)
-#     """
-
-#     ipp = page_size // key_size
-#     num_pages = int(np.ceil(len(keys) / ipp))
-
-#     # 将 key 映射到 page_id
-#     key_to_page = np.arange(len(keys)) // ipp
-
-#     # 用二分搜索找到 query 的位置 -> 对应 page id
-#     query_idx = np.searchsorted(keys, queries)
-#     query_idx = np.clip(query_idx, 0, len(keys) - 1)  # 防越界
-#     query_pages = key_to_page[query_idx]
-
-#     # 统计每个 page 被命中的次数
-#     pageCount = np.bincount(query_pages, minlength=num_pages)
-#     # print("Page Count:", pageCount)
-#     # 划分连续的非零区间
-#     partitions = []
-#     start = None
-#     for i, cnt in enumerate(pageCount):
-#         if cnt > 0 and start is None:
-#             start = i
-#         elif cnt == 0 and start is not None:
-#             partitions.append((start, i - 1))
-#             start = None
-#     if start is not None:
-#         partitions.append((start, num_pages - 1))
-#     print("Partitions:", partitions)
-    
-#     totalPagesRef = 0  
-#     # 生成结果
-#     lengths = []
-#     bitmap = []
-#     for (l, r) in partitions:
-#         N = pageCount[l:r+1].sum()
-#         K = r - l + 1
-#         totalPagesRef += K
-#         print("N:",N,"K:",K)
-#         mu = N / K
-#         lengths.append(N)
-#         tau = (ipp+delta+H/K)/(math.log(2*epsilon,2)+H+delta)
-#         print("τ:",tau)
-#         print("μ:",mu)
-#         if mu >= tau:
-#             bitmap.append(1)  # range
-#         else:
-#             bitmap.append(0)  # point
-#     print("Total Pages (Ref):", totalPagesRef)
-#     print("Total Queries:", sum(lengths))
-#     # show numbers of range and point
-#     range_queries = sum(N for N, b in zip(lengths, bitmap) if b == 1)
-#     point_queries = sum(N for N, b in zip(lengths, bitmap) if b == 0)
-#     print("Range queries:", range_queries)
-#     print("Point queries:", point_queries)
-    
-#     # save to file
-#     np.array(lengths, dtype=np.int64).tofile(lengths_file)
-#     np.array(bitmap, dtype=np.int8).tofile(bitmap_file)
-
-#     return lengths, bitmap
 
 def join_partition(
     keys: np.ndarray,

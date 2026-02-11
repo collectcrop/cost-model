@@ -221,8 +221,8 @@ int main(int argc, char **argv) {
     std::vector<KeyType> all_queries = load_queries_pgm_safe<KeyType>(query_file);
 
     size_t N = all_queries.size();
-    // size_t eval_begin = static_cast<size_t>(0.3 * N);  // 30% profiling，70% evaluation
-    size_t eval_begin = 0;
+    size_t eval_begin = static_cast<size_t>(0.3 * N);  // 30% profiling，70% evaluation
+    // size_t eval_begin = 0;
     std::vector<KeyType> queries(
         all_queries.begin() + eval_begin,
         all_queries.end()
@@ -241,15 +241,16 @@ int main(int argc, char **argv) {
     << "IO_fraction,"<< "mem_fraction,"<< "cache_hit_ratio\n";
     csv << std::fixed << std::setprecision(6);
     uint64_t threads = 1;
-    falcon::CachePolicy s = falcon::CachePolicy::NONE;
+    falcon::CachePolicy s = falcon::CachePolicy::LRU;
     for (int i=0;i<repeats;i++){
-        for (size_t epsilon : {16}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64
+        for (size_t epsilon : {2,4,6,8,10,12,14,16,18,20,24,32,48,64}) {     //2,4,6,8,10,12,14,16,18,20,24,32,48,64
             BenchmarkResult result;
             if (MemoryBudget<16*num_keys/(2*epsilon)){
                 std::cout << "Memory budget too small for ε=" << epsilon << ", skipping.\n";
                 continue;
             }
             const size_t M = MemoryBudget - 16*num_keys/(2*epsilon);
+            std::cout << "Memory budget: " << M << std::endl;
             switch (epsilon) {
                 case 2: result = benchmark_mt<2>(data, queries, file, s, threads, M); break;
                 case 4: result = benchmark_mt<4>(data, queries, file, s, threads, M); break;
