@@ -126,7 +126,6 @@ void *worker_libaio(void *arg) {
         }
     }
 
-    // 每次最多提交多少个（<= qdepth）。你也可以设成固定 32/64 做实验对比
     const int MAX_BATCH = t->qdepth;
 
     struct iocb **submit_list = (struct iocb**)malloc(sizeof(struct iocb*) * MAX_BATCH);
@@ -143,7 +142,7 @@ void *worker_libaio(void *arg) {
     while (completed < t->ops) {
         int inflight = submitted - completed;
 
-        // ========== 1) 尽量 batch 提交，维持队列“接近满” ==========
+        // ========== 1) batch submission ==========
         while (inflight < t->qdepth && submitted < t->ops) {
             int free_slots = t->qdepth - inflight;
             int remain_ops = t->ops - submitted;
@@ -157,11 +156,10 @@ void *worker_libaio(void *arg) {
                 off_t offset = ((off_t)rand() % (FILE_SIZE / BlockSize)) * BlockSize;
 
                 io_prep_pread(cbs[idx], t->fd, bufs[idx], BlockSize, offset);
-                cbs[idx]->data = bufs[idx];              // 可选：用于识别/校验
+                cbs[idx]->data = bufs[idx];              
                 submit_list[i] = cbs[idx];
             }
 
-            // batch 提交：注意可能“部分提交”
             int left = k;
             int pos  = 0;
             while (left > 0) {
@@ -171,12 +169,12 @@ void *worker_libaio(void *arg) {
                 } while (ret < 0 && errno == EAGAIN);
 
                 if (ret < 0) {
-                    // 真正错误：直接退出（或你也可以 continue/统计错误）
+                    // error
                     perror("io_submit");
                     goto out;
                 }
 
-                // ret 可能小于 left：部分提交
+                // partial submission
                 pos  += ret;
                 left -= ret;
             }
@@ -185,11 +183,11 @@ void *worker_libaio(void *arg) {
             inflight  += k;
         }
 
-        // ========== 2) 回收完成事件（避免 min_nr=0 空转） ==========
+        // ========== 2) reap completed events ==========
         int inflight_now = submitted - completed;
         if (inflight_now <= 0) continue;
 
-        // 至少等 1 个完成，最多回收 inflight_now（或 qdepth）
+        // wait for at least one completion, and constraint maximum number of completions to be reaped
         int max_nr = inflight_now < t->qdepth ? inflight_now : t->qdepth;
 
         int got;
@@ -203,7 +201,6 @@ void *worker_libaio(void *arg) {
         }
 
         completed += got;
-        // 你如果想做数据校验，可用 events[i].data / events[i].obj 来定位 buffer/iocb
     }
 
 out:

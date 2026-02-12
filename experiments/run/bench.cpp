@@ -24,10 +24,10 @@
 #include "FALCON/pgm/pgm_index.hpp"
 #include "FALCON/utils/include.hpp"
 #include "FALCON/utils/utils.hpp"
-#include "FALCON/utils/config.hpp"
 #include "FALCON/utils/LatencyRecorder.hpp"
 #include "FALCON/Falcon.hpp"     
 #include "FALCON/cache/CacheInterface.hpp" 
+#include "./config.hpp"
 
 using KeyType = uint64_t;
 using timer = std::chrono::high_resolution_clock;
@@ -88,7 +88,8 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
                              falcon::CachePolicy s,
                              int num_threads,
                              size_t memory_budget_bytes,
-                             size_t batch_size = 128) {
+                             size_t batch_size = 128,
+                             int worker_threads = -1) {
     // 1) construct PGM
     pgm::PGMIndex<KeyType, Epsilon> index(data);
     // 2) open data file
@@ -117,7 +118,7 @@ BenchmarkResult benchmark_mt(std::vector<KeyType> data,
         /*cache_shards=*/ 1,
         /*max_pages_per_batch=*/ 256,
         /*max_wait_us=*/ 50,
-        /*workers=*/ std::max(num_threads/16, 1) 
+        /*workers=*/ (worker_threads==-1)?std::max(num_threads/16, 1):worker_threads 
     );
 
     // 5) run queries with multiple threads

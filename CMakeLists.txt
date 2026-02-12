@@ -64,6 +64,10 @@ add_library(falcon_bench_lib
     experiments/run/epsilon_bench.cpp
     experiments/run/thread_bench.cpp
     experiments/run/batch_bench.cpp
+    experiments/run/worker_bench.cpp
+    experiments/run/range_bench.cpp
+    experiments/run/range_eps_bench.cpp
+    experiments/run/range_single_bench.cpp
 )
 
 target_include_directories(falcon_bench_lib PUBLIC include)

@@ -24,8 +24,8 @@
 #include "FALCON/utils/LatencyRecorder.hpp"
 #include "FALCON/Falcon.hpp"     
 #include "FALCON/cache/CacheInterface.hpp" 
-#include "FALCON/utils/config.hpp"
 #include "./bench.cpp"
+#include "./config.hpp"
 using KeyType = uint64_t;
 
 // struct BenchmarkResult {

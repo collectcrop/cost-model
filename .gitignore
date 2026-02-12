@@ -19,6 +19,7 @@ experiments/io_bench/testfile
 *.out
 *.synctex.gz
 *.ipynb
+.gdb_history
 index
 test
 visualize/

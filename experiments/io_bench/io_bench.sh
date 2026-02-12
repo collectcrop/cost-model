@@ -1,21 +1,17 @@
 #!/bin/bash
-# 自动化 I/O 基准测试
-# 测试 pread (多线程)、libaio (QD)、io_uring (QD)
-# 会运行多次并取平均值
-
 TESTFILE="testfile"
 BS=4096       # block size
-NREQ=100000   # 总请求数
-REPEAT=30      # 每组重复次数
-DEPTHS=(1 2 4 8 16 32 64 128 256 512 1024)  # 并发度 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384
+NREQ=100000   # number of requests
+REPEAT=30      # repeat times
+DEPTHS=(1 2 4 8 16 32 64 128 256 512 1024) 
 
-# 检查测试文件是否存在
+# check test file
 if [ ! -f "$TESTFILE" ]; then
-    echo "生成测试文件 $TESTFILE ..."
+    echo "generating $TESTFILE ..."
     fallocate -l 4G "$TESTFILE"
 fi
 
-# 用 awk 计算平均值
+# calculate average
 calc_avg() {
     awk '{ total += $1; count++ } END { if (count > 0) print total/count; }'
 }
@@ -25,7 +21,7 @@ run_test() {
     depth=$2
     qd=$3
     result_file=$4
-    echo "[$mode] depth=$depth 测试中..."
+    echo "[$mode] depth=$depth running..."
 
     for ((i=1; i<=REPEAT; i++)); do
         if [ "$mode" = "psync" ]; then
@@ -43,7 +39,7 @@ run_test() {
 }
 
 echo "================= I/O Benchmark ================="
-echo "文件: $TESTFILE, block=$BS, 请求数=$NREQ, 重复次数=$REPEAT"
+echo "file: $TESTFILE, block=$BS, requests=$NREQ, repeats=$REPEAT"
 echo "================================================="
 
 mkdir -p results

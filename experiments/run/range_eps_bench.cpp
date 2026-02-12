@@ -1,4 +1,3 @@
-// test epsilon
 #include <sched.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -6,41 +5,32 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <random>
-#include <unordered_map>
 #include <algorithm>
 #include <cstdint>
-#include <cassert>
 #include <chrono>
-#include <fstream>
-#include <filesystem>
 #include <thread>
-#include <mutex>
-#include <array>
+#include <atomic>
 #include <fcntl.h>
-#include "distribution/zipf.hpp"
-#include "FALCON/pgm/pgm_index.hpp"
+#include <iomanip>
+
+// #include "rmi/books_rmi.h"
 #include "FALCON/utils/include.hpp"
 #include "FALCON/utils/utils.hpp"
-#include "FALCON/utils/LatencyRecorder.hpp"
-#include "FALCON/Falcon.hpp"     
-#include "FALCON/cache/CacheInterface.hpp" 
-#include "./bench.cpp"
+#include "FALCON/Falcon.hpp"
+#include "FALCON/cache/CacheInterface.hpp"
+#include "./range_bench.cpp"
 #include "./config.hpp"
 
-using KeyType = uint64_t;
-using timer = std::chrono::high_resolution_clock;
-
-void run_epsilon(const EpsilonConfig& cfg) {
+void run_range_eps(RangeEpsConfig& cfg){
     // 1) load data and queries
     std::string file         = falcon::DATASETS + cfg.dataset;
-    std::string query_file   = falcon::DATASETS + cfg.dataset + ".query.bin";
+    std::string query_file   = falcon::DATASETS + cfg.dataset + ".range.bin";
     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, cfg.num_keys);
-    std::vector<KeyType> all_queries = load_queries_pgm_safe<KeyType>(query_file);
+    std::vector<falcon::RangeQ>  all_queries = load_ranges_pgm_safe(query_file);
     size_t MemoryBudget = static_cast<size_t>(cfg.memory_mb) * 1024ull * 1024ull;
     size_t N = all_queries.size();
     size_t eval_begin = static_cast<size_t>(0.3 * N);  // 30% profiling，70% evaluation
-    std::vector<KeyType> queries(
+    std::vector<falcon::RangeQ> queries(
         all_queries.begin() + eval_begin,
         all_queries.end()
     );
@@ -55,7 +45,7 @@ void run_epsilon(const EpsilonConfig& cfg) {
             epsilon,
             std::make_index_sequence<SupportedEps.size()>(),
             [&]<size_t E>() {
-                return benchmark_mt<E>(data, queries, file,
+                return bench_range<E>(data, queries, file,
                                     cfg.policy, 1, M);
             }
         );
