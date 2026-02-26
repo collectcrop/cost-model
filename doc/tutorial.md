@@ -1,4 +1,4 @@
-# 1. Workload Generation Guidance
+# 1. Workload Generation
 This section describes how to generate point, range, and join workloads consistent with the evaluation methodology of our project. To generate the workload, please use `utils/generate_query.py` .All workloads are derived from sorted uint64 key files (e.g., SOSD datasets) stored in binary format.
 
 The generator is designed to (i) approximate realistic skewed access patterns, (ii) support reproducibility, and (iii) produce workloads directly consumable by the FALCON benchmarking pipeline.
@@ -130,7 +130,7 @@ sample_unique_mixture(...)
 - Maintains mixture skew
 - Uses oversampling to guarantee uniqueness
 
-Components:
+#### Components
 - Hotspot
 - Global Zipf
 - Uniform fallback
@@ -216,3 +216,97 @@ Outputs:
 - bitmap: 0 = point, 1 = range
 
 These files are directly consumed by join benchmarks.
+
+# 2. I/O Cost Estimation
+This section describes how we use our implemented functions to estimate I/O cost under a given memory budget. We only briefly summarize the underlying model and focus on how the estimation is carried out in practice. To estimate I/O cost, please use `utils/optimalEpsilon.py`. 
+
+## 2.1. Overview
+Our estimation framework predicts the average number of physical page I/Os per query under:
+- total memory budget $M$,
+- PGM error bound $\epsilon$, 
+- page size $ps$,
+- items per page $ipp$,
+- dataset size $n$,
+- query workload (point, range).
+
+At a high level:
+$$
+Cost = (1-h)\times DAC
+$$
+where
+- $h$ is the estimated buffer hit ratio,
+- $DAC$ is the estimated data access cost computed from the learned index behavior. 
+
+The hit ratio is estimated using Che’s approximation for LRU caching.
+
+## 2.2. Point Query Cost Estimation
+**1. Memory decomposition**
+For each $\epsilon$, the function computes:
+- index size:
+$$
+M_{index}=\frac{n\cdot seg_size}{2\epsilon}
+$$
+- Buffer size:
+$$
+M_{buffer}=M-M_{index}
+$$
+- Buffer capacity in pages:
+$$
+C=\frac{M_{buffer}}{ps}
+$$
+
+**2. Logical page accesses**
+The expected data access cost (DAC) is computed via:
+```python
+expected_DAC(epsilon, ipp)
+```
+**3. Page popularity extraction**
+We estimate page request distribution directly from the query trace using:
+```python
+estimate_page_counts_from_queryfile(...)
+```
+This function maps each query to a data position, expands it using a triangular kernel and aggregates counts at page granularity.
+
+**4. Buffer hit ratio estimation**
+We compute the hit ratio using:
+```python
+sample_ratio(C, total_pages, q)
+```
+This internally solves Che's characteristic time equation and returns the estimated hit ratio.
+
+**5. Final cost**
+$$
+Cost = (1-h)\cdot \mathbb{E}[DAC]
+$$
+
+## 2.3. Range Query Cost Estimation
+**1.** True range boundaries are mapped to data positions.
+**2.** The expected Range DAC (RDAC) is computed via:
+```python
+get_RDAC(rlo, rhi, epsilon, ipp)
+```
+This function calculates the expected number of pages touched under bounded prediction error.
+**3.** Expected per-page request counts are computed using:
+```python
+estimate_page_counts_from_range_queryfile(...)
+```
+This analytically distributes probability mass to:
+- core pages (always touched),
+- boundary pages (fractional probability).
+
+**4.** The page distribution is normalized and passed to `sample_ratio(...)` to estimate the buffer hit ratio.
+**5.** Final cost:
+$$
+Cost = (1-h)\cdot\mathbb{E}[RDAC]
+$$
+
+
+## 2.4. Epsilon Sweeping
+For a user-given candidate set of $\epsilon$, `getExpectedCostPerEpsilon()` and `getExpectedRangeCostPerEpsilon()` interface iterate over feasible $\epsilon$ values and compute:
+- index size,
+- buffer capacity,
+- hit ratio,
+- expected I/O cost,
+
+and output the cost-$\epsilon$ curve for parameter tuning. The results are stored in `<workload>.log` by default. The directory of log files should be configured first in `utils/optimalEpsilon.py`.
+

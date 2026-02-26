@@ -59,7 +59,7 @@ void *worker_pread(void *arg) {
 
 //     int submitted = 0, completed = 0;
 //     while (completed < t->ops) {
-//         // 提交新请求
+//        
 //         while (submitted - completed < t->qdepth && submitted < t->ops) {
 //             off_t offset = ((off_t)rand() % (FILE_SIZE / BlockSize)) * BlockSize;
 //             io_prep_pread(cbs[submitted % t->qdepth], t->fd, bufs[submitted % t->qdepth],
@@ -70,13 +70,13 @@ void *worker_pread(void *arg) {
 //             int ret;
 //             do {
 //                 ret = io_submit(ctx, 1, list);
-//             } while (ret < 0 && errno == EAGAIN); // 避免提交失败直接丢
+//             } while (ret < 0 && errno == EAGAIN); 
 
 //             if (ret == 1)
 //                 submitted++;
 //         }
 
-//         // 回收完成事件
+//         
 //         int got = io_getevents(ctx, 0, t->qdepth, events, NULL);
 //         completed += got;
 //     }
@@ -150,7 +150,6 @@ void *worker_libaio(void *arg) {
             if (k > MAX_BATCH) k = MAX_BATCH;
             if (k <= 0) break;
 
-            // 准备 k 个 iocb*
             for (int i = 0; i < k; i++) {
                 int idx = (submitted + i) % t->qdepth;
                 off_t offset = ((off_t)rand() % (FILE_SIZE / BlockSize)) * BlockSize;

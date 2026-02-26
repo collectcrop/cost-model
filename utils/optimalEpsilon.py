@@ -657,8 +657,8 @@ def getExpectedRangeCostPerEpsilon(ipp, seg_size, M, n, ps,data_file="",query_fi
     h_list = []
     time_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    # r = range(least_eps, 65, 2)
-    r = range(8,17)
+    r = range(least_eps, 65, 2)
+    # r = range(8,17)
     for eps in r:
         t1 = time.time()
         cost,h = range_cost_function(eps, n, seg_size, M, ipp, ps, query, data, fraction)
@@ -689,7 +689,7 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
     h_list = []
     time_list = []
     least_eps = math.ceil(n*seg_size/(2*M))
-    for eps in range(8,17):     # range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2)
+    for eps in range(least_eps if (least_eps%2==0) else least_eps+1, 129, 2):     
         t1 = time.time()
         cost,h = cost_function(eps, n, seg_size, M, ipp, ps, type, query, data, s)
         eps_list.append(eps)

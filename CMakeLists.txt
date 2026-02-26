@@ -132,3 +132,13 @@ target_link_libraries(page_fetch_test
     PUBLIC OpenMP::OpenMP_CXX
     falcon_core
 )
+
+add_executable(simple_usage
+    experiments/run/examples/simple.cpp
+)
+target_include_directories(simple_usage PUBLIC include)
+target_link_libraries(simple_usage
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+    falcon_core
+)
