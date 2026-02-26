@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BIN="./test"
+BIN="./pgm_fetch_test"
 DATA="/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/books_200M_uint64_unique"
 QUERIES="/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/books_200M_uint64_unique.1Kquery.bin"
 OUTDIR="log"

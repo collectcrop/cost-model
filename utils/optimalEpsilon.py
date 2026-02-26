@@ -3,8 +3,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import time
 import os, sys
-from scipy.optimize import brentq  # 用于解非线性方程
-from scipy.special import zeta     # Riemann zeta 函数
+from scipy.optimize import brentq  
+from scipy.special import zeta     
 from collections import Counter
 from scipy.signal import fftconvolve
 

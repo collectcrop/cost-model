@@ -122,49 +122,13 @@ target_link_libraries(bplustree_test
     PUBLIC OpenMP::OpenMP_CXX
     PRIVATE bplustree
 )
-# ================
-# FALCON benchmarks
-# ================
 
-# add_executable(falcon_thread_test experiments/parallel.cpp)
-# target_link_libraries(falcon_thread_test PRIVATE falcon_core)
-
-# add_executable(falcon_eps_test experiments/parallel2.cpp)
-# target_link_libraries(falcon_eps_test PRIVATE falcon_core)
-
-# add_executable(falcon_batch_test experiments/parallel4.cpp)
-# target_link_libraries(falcon_batch_test PRIVATE falcon_core)
-
-# add_executable(falcon_worker_test experiments/parallel6.cpp)
-# target_link_libraries(falcon_worker_test PRIVATE falcon_core)
-
-# add_executable(falcon_range_eps_test experiments/range_parallel.cpp)
-# target_link_libraries(falcon_range_eps_test PRIVATE falcon_core)
-
-# add_executable(falcon_range_single_test experiments/falcon_range_single.cpp)
-# target_link_libraries(falcon_range_single_test PRIVATE falcon_core)
-
-# add_executable(falcon_point_test experiments/falcon_point.cpp)
-# target_link_libraries(falcon_point_test PRIVATE falcon_core)
-
-# add_executable(falcon_join_test experiments/join_parallel.cpp)
-# target_link_libraries(falcon_join_test PRIVATE falcon_core)
-
-# ================
-# other benchmark
-# ================
-
-# add_executable(pgm_disk_test experiments/benchmark/pgm_disk_test.cpp)
-# target_link_libraries(pgm_disk_test PRIVATE falcon_core)
-
-# add_executable(aulid_test experiments/benchmark/aulid_test.cpp)
-# target_link_libraries(aulid_test PRIVATE falcon_core)
-
-# add_executable(cache_policy_test experiments/cache_policy_bench.cpp)
-# target_link_libraries(cache_policy_test PRIVATE falcon_core)
-
-# add_executable(page_fetch_test experiments/page_fetch_strategy.cpp)
-# target_link_libraries(page_fetch_test PRIVATE falcon_core)
-
-# add_executable(index_build_test experiments/build.cpp)
-# target_link_libraries(index_build_test PRIVATE falcon_core)
+add_executable(page_fetch_test
+    experiments/page_fetch_strategy.cpp
+)
+target_include_directories(page_fetch_test PUBLIC include)
+target_link_libraries(page_fetch_test
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+    falcon_core
+)

@@ -13,13 +13,13 @@
 #include <unistd.h>
 #include <vector>
 
-#include "utils/include.hpp"
-#include "utils/utils.hpp"
-#include "IO/io_interface.hpp"
-#include "IO/SyncInterface.hpp"
-#include "IO/LibaioInterface.hpp"
-#include "IO/IOuringInterface.hpp"
-#include "pgm/pgm_index.hpp"
+#include "FALCON/utils/include.hpp"
+#include "FALCON/utils/utils.hpp"
+#include "FALCON/IO/io_interface.hpp"
+#include "FALCON/IO/SyncInterface.hpp"
+#include "FALCON/IO/LibaioInterface.hpp"
+#include "FALCON/IO/IOuringInterface.hpp"
+#include "FALCON/pgm/pgm_index.hpp"
 
 using Key = uint64_t;
 using Clock = std::chrono::high_resolution_clock;
@@ -32,7 +32,7 @@ struct BenchStat {
     uint64_t bytes = 0;
     uint64_t ns = 0;
 };
-static inline void accumulate(BenchStat& b, const pgm::IOResult& io) {
+static inline void accumulate(BenchStat& b, const falcon::IOResult& io) {
     b.logical_ios  += io.logical_ios;
     b.physical_ios += io.physical_ios;
     b.bytes        += io.bytes;
@@ -42,7 +42,7 @@ enum class Strategy { AllAtOnce, OneByOne };
 enum class IOType { PSYNC, LIBAIO, URING };
 
 #ifndef EPSILON
-#define EPSILON 64
+#define EPSILON 65536
 #endif
 
 struct Args {
@@ -112,10 +112,10 @@ static bool parse_args(int argc, char** argv, Args& a) {
 }
 
 
-static inline bool page_binary_search(const pgm::Page& pg, Key key) {
-    if (!pg.data || pg.valid_len < sizeof(pgm::Record)) return false;
-    auto* recs = reinterpret_cast<const pgm::Record*>(pg.data.get());
-    size_t cnt = pg.valid_len / sizeof(pgm::Record);
+static inline bool page_binary_search(const falcon::Page& pg, Key key) {
+    if (!pg.data || pg.valid_len < sizeof(falcon::Record)) return false;
+    auto* recs = reinterpret_cast<const falcon::Record*>(pg.data.get());
+    size_t cnt = pg.valid_len / sizeof(falcon::Record);
     // quick reject
     if (recs[0].key > key || recs[cnt - 1].key < key) return false;
 
@@ -133,10 +133,10 @@ static inline bool page_binary_search(const pgm::Page& pg, Key key) {
 }
 
 template<class IndexT>
-static bool lookup_all_at_once(IOInterface& io, const IndexT& idx, Key key, BenchStat& st) {
+static bool lookup_all_at_once(falcon::IOInterface& io, const IndexT& idx, Key key, BenchStat& st) {
     auto ap = idx.search(key);
-    size_t page_lo = ap.lo / pgm::ITEM_PER_PAGE;
-    size_t page_hi = ap.hi / pgm::ITEM_PER_PAGE;
+    size_t page_lo = ap.lo / falcon::ITEM_PER_PAGE;
+    size_t page_hi = ap.hi / falcon::ITEM_PER_PAGE;
     if (page_hi < page_lo) page_hi = page_lo;
     size_t len = page_hi - page_lo + 1;
 
@@ -147,8 +147,8 @@ static bool lookup_all_at_once(IOInterface& io, const IndexT& idx, Key key, Benc
     for (size_t i = 0; i < pages.size(); ++i) {
         const auto& pg = pages[i];
         if (!pg.data || pg.valid_len == 0) continue;
-        auto* recs = reinterpret_cast<const pgm::Record*>(pg.data.get());
-        size_t cnt = pg.valid_len / sizeof(pgm::Record);
+        auto* recs = reinterpret_cast<const falcon::Record*>(pg.data.get());
+        size_t cnt = pg.valid_len / sizeof(falcon::Record);
         if (cnt == 0) continue;
 
         if (recs[cnt - 1].key < key) continue;
@@ -159,10 +159,10 @@ static bool lookup_all_at_once(IOInterface& io, const IndexT& idx, Key key, Benc
 }
 
 template<class IndexT>
-static bool lookup_one_by_one(IOInterface& io, const IndexT& idx, Key key, BenchStat& st) {
+static bool lookup_one_by_one(falcon::IOInterface& io, const IndexT& idx, Key key, BenchStat& st) {
     auto ap = idx.search(key);
-    size_t page_lo = ap.lo / pgm::ITEM_PER_PAGE;
-    size_t page_hi = ap.hi / pgm::ITEM_PER_PAGE;
+    size_t page_lo = ap.lo / falcon::ITEM_PER_PAGE;
+    size_t page_hi = ap.hi / falcon::ITEM_PER_PAGE;
     if (page_hi < page_lo) page_hi = page_lo;
 
     // Left-to-right probing: page_lo, page_lo+1, ..., page_hi
@@ -172,8 +172,8 @@ static bool lookup_one_by_one(IOInterface& io, const IndexT& idx, Key key, Bench
 
         if (!pg.data || pg.valid_len == 0) continue;
 
-        auto* recs = reinterpret_cast<const pgm::Record*>(pg.data.get());
-        size_t cnt = pg.valid_len / sizeof(pgm::Record);
+        auto* recs = reinterpret_cast<const falcon::Record*>(pg.data.get());
+        size_t cnt = pg.valid_len / sizeof(falcon::Record);
         if (cnt == 0) continue;
 
         // Early prune:
@@ -207,10 +207,10 @@ static int open_data_fd(const std::string& path, bool direct) {
     return fd;
 }
 
-static std::unique_ptr<IOInterface> make_io(IOType t, int fd) {
-    if (t == IOType::PSYNC) return std::make_unique<SyncInterface>(fd);
-    if (t == IOType::LIBAIO) return std::make_unique<LibaioInterface>(fd);
-    return std::make_unique<IoUringInterface>(fd);
+static std::unique_ptr<falcon::IOInterface> make_io(IOType t, int fd) {
+    if (t == IOType::PSYNC) return std::make_unique<falcon::SyncInterface>(fd);
+    if (t == IOType::LIBAIO) return std::make_unique<falcon::LibaioInterface>(fd);
+    return std::make_unique<falcon::IoUringInterface>(fd);
 }
 int main(int argc, char** argv) {
     Args args;

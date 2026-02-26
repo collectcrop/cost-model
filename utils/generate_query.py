@@ -404,14 +404,14 @@ def main():
     #     for size in sizeList:
     #         raw = np.fromfile(f"{DATASETS_DIRECTORY}{dataset}_{int(size/1e6)}M_uint64_unique",
     #                         dtype=np.uint64)
-    #         keys = raw        # SOSD 已排序 key
+    #         keys = raw        
 
     #         queries = generate_range_queries_from_data(
     #             keys,
     #             num_queries,
-    #             start_dist='uniform',      # 或 'normal'
-    #             length_dist='uniform', # 或 'uniform'
-    #             max_length_keys=5000,      # 这里是“key 个数”的最大跨度
+    #             start_dist='uniform',     
+    #             length_dist='uniform', 
+    #             max_length_keys=5000,      
     #             exp_scale=100,
     #             seed=42
     #         )
