@@ -123,7 +123,7 @@ private:
             if (batch.empty()) continue;
 
             auto c0 = Clock::now();
-            // 1) 汇总页需求
+            
             std::vector<size_t> pages;
             pages.reserve(1024);
             std::unordered_map<size_t, size_t> freq;
@@ -141,29 +141,29 @@ private:
             std::sort(pages.begin(), pages.end());
             pages.erase(std::unique(pages.begin(), pages.end()), pages.end());
 
-            // 2) 先查缓存：命中页直接准备好；未命中页放 need_io
+            //check cache
             std::unordered_map<size_t, falcon::Page> ready;
             ready.reserve(pages.size()*2);
             std::vector<size_t> need_io;
             need_io.reserve(pages.size());
             for (auto pgidx : pages) {
-                size_t m = freq[pgidx];     // 这个页在本 batch 被访问了 m 次
+                size_t m = freq[pgidx];     // the visited times of this page
                 falcon::Page ph;
                 if (cache_->get(pgidx, ph) && ph.data && ph.valid_len > 0) {
                     ready.emplace(pgidx, std::move(ph));
                     logical_hits_.fetch_add(m, std::memory_order_relaxed);
                 } else {
                     need_io.push_back(pgidx);
-                    // 第一条访问触发 1 次 miss
+                    // the first visit trigger miss
                     logical_misses_.fetch_add(1, std::memory_order_relaxed);
-                    // 剩下 (m-1) 次复用刚读入的页，可以视作命中
+                    // the remaining (m-1) visit can be regarded as hits
                     if (m > 1) {
                         logical_hits_.fetch_add(m - 1, std::memory_order_relaxed);
                     }
                 }
             }
             
-            // 3) 对缺页进行一次性批量 I/O
+            // batch I/O
             if (!need_io.empty()) {
                 auto [vec, io_stat] = io_->triggerIO_batch(need_io);
                 iostat_ios_.fetch_add(io_stat.physical_ios, std::memory_order_relaxed);
@@ -171,15 +171,14 @@ private:
                 iostat_bytes_.fetch_add(io_stat.bytes, std::memory_order_relaxed);
                 iostat_ns_.fetch_add(io_stat.ns, std::memory_order_relaxed);
 
-                // 回灌缓存 + 加入 ready
+                // update cache and cache stats
                 for (size_t i = 0; i < need_io.size(); ++i) {
                     size_t pgidx = need_io[i];
-                    falcon::Page page = std::move(vec[i]); // 可能为空（错误或文件尾）
+                    falcon::Page page = std::move(vec[i]); 
                     if (page.data && page.valid_len > 0) {
-                        cache_->put(pgidx, falcon::Page{ page.data, page.valid_len }); // 共享句柄
+                        cache_->put(pgidx, falcon::Page{ page.data, page.valid_len }); 
                         ready.emplace(pgidx, std::move(page));
                     } else {
-                        // 留空页进入 ready；后续 fulfill 会跳过
                         ready.emplace(pgidx, falcon::Page{});
                     }
                 }
@@ -187,7 +186,7 @@ private:
             auto c1 = Clock::now();
             cache_ns_.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(c1 - c0).count(), std::memory_order_relaxed);
             
-            // 4) 兑现查询
+            // fulfill requests
             for (auto &r : batch) fulfill(r, ready);
         }
     }
@@ -231,7 +230,6 @@ private:
     }
 };
 
-// 对外：PGM 封装（含缓存配置）
 template <typename K, size_t Eps, size_t EpsRec, typename Fp=float>
 class FalconPGM {
 public:

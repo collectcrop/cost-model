@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
-#include "bplustree/stx_disk_kv.h"   // 前面我给你的封装：内存索引 + 数据文件 I/O
-#include "utils/include.hpp"
-#include "utils/utils.hpp"
+#include "bplustree/stx_disk_kv.h"  
+#include "FALCON/utils/include.hpp"
+#include "FALCON/utils/utils.hpp"
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -12,38 +12,31 @@
 #include <cmath>
 #include <errno.h>
 
-static const bool   USE_O_DIRECT = false;  // 是否用 O_DIRECT 打开数据文件（建议 true，bounce buffer 已封装）
-
-// using KeyType = uint64_t;
-#define MAX_THREADS (1 << 14)
-#define RUNS 10
-
+static const bool   USE_O_DIRECT = true;  
 static inline uint64_t ns_between(const timespec &a, const timespec &b) {
   return (uint64_t)(b.tv_sec - a.tv_sec) * 1000000000ull
        + (uint64_t)(b.tv_nsec - a.tv_nsec);
 }
 
 struct thread_args {
-  StxDiskKV*            idx;      // 共享索引（线程安全）
-  std::vector<KeyType>* queries;  // 查询 key 数组
-  uint64_t              start;    // 起始下标（包含）
-  uint64_t              end;      // 结束下标（不含）
-  uint64_t              found;    // 线程命中数
-  size_t                rec_len;  // 固定记录长度
+  StxDiskKV*            idx;      
+  std::vector<KeyType>* queries;  
+  uint64_t              start;   
+  uint64_t              end;      
+  uint64_t              found;    
+  size_t                rec_len;  
   uint64_t*             lat_ns; 
-  uint64_t              thread_cpu_ns;   // 新增：该线程 CPU 时间
-  uint64_t              thread_wall_ns;  // 新增：该线程 wall 时间
+  uint64_t              thread_cpu_ns;   
+  uint64_t              thread_wall_ns;  
 };
 
 static void summarize_latency(const uint64_t* lat_ns, uint64_t N,
                               double* avg_ns, uint64_t* p50, uint64_t* p90, uint64_t* p99)
 {
-  // 平均
   __uint128_t sum = 0;
   for (uint64_t i = 0; i < N; ++i) sum += lat_ns[i];
   *avg_ns = (double)sum / (double)N;
 
-  // 分位数（不改变原数组：复制一份或做选择算法）
   std::vector<uint64_t> v(lat_ns, lat_ns + N);
   auto nth = [&](double q) {
     uint64_t k = (uint64_t)std::min<double>(N-1, std::floor(q * (N-1)));
@@ -57,8 +50,6 @@ static void summarize_latency(const uint64_t* lat_ns, uint64_t N,
 static inline double wall_between(const struct timespec& a, const struct timespec& b) {
   return (b.tv_sec - a.tv_sec) + (b.tv_nsec - a.tv_nsec) / 1e9;
 }
-
-// 线程函数：存在性 + 拉取记录（如果只是存在性统计，可以改成 get_offset）
 void* query_worker(void* arg) {
   thread_args* args = (thread_args*)arg;
   std::vector<char> buf(args->rec_len);
@@ -72,11 +63,10 @@ void* query_worker(void* arg) {
   for (uint64_t i = args->start; i < args->end; i++) {
     timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC_RAW, &t0);
-    // 读取固定长度记录：>0 表示命中；对于 key-only 的 8 字节文件，n==8 即命中
     ssize_t n = args->idx->get_record((*args->queries)[i], buf.data(), args->rec_len);
     clock_gettime(CLOCK_MONOTONIC_RAW, &t1);
 
-    args->lat_ns[i] = ns_between(t0, t1);   // 每条 query 的实际延迟（ns）
+    args->lat_ns[i] = ns_between(t0, t1);   
     if (n > 0) found++;
   }
   clock_gettime(CLOCK_MONOTONIC, &w1);
@@ -88,7 +78,6 @@ void* query_worker(void* arg) {
   return nullptr;
 }
 static int build_index_from_data(StxDiskKV& kv, const char* data_path, size_t rec_len) {
-  // 用 O_DIRECT 打开数据文件（如果失败会返回负 errno）
   int rc = kv.open_data_file(data_path, USE_O_DIRECT);
   if (rc < 0) {
     fprintf(stderr, "open_data_file failed: %s rc=%d\n", data_path, rc);
@@ -97,11 +86,8 @@ static int build_index_from_data(StxDiskKV& kv, const char* data_path, size_t re
 
   std::vector<KeyType> keys = load_binary<KeyType>(data_path);
   size_t nkeys = keys.size();
-  // 计算 offsets = i * rec_len
   std::vector<uint64_t> offs(nkeys);
   for (size_t i = 0; i < nkeys; ++i) offs[i] = (uint64_t)i * (uint64_t)rec_len;
-
-  // 批量建索引（stx::btree 内存插入）
   kv.bulk_build(keys, offs.data(), nkeys);
 
   return 0;
@@ -117,7 +103,7 @@ static int run_queries_multithread(StxDiskKV& kv,
                                    double* out_iops,
                                    KeyType* out_p50, KeyType* out_p90, KeyType* out_p99,
                                    double* out_mem_time_s, double* out_io_time_s) {
-  if (threads <= 0 || threads > MAX_THREADS) return -1;
+  if (threads <= 0) return -1;
 
   std::unique_ptr<KeyType[]> lat_ns(new KeyType[total_queries]);
 
@@ -140,7 +126,7 @@ static int run_queries_multithread(StxDiskKV& kv,
     int rc = pthread_create(&tids[i], nullptr, query_worker, &args[i]);
     if (rc != 0) {
       fprintf(stderr, "pthread_create failed at %d\n", i);
-      threads = i; // 只 join 已创建的
+      threads = i; 
       break;
     }
   }
@@ -160,8 +146,6 @@ static int run_queries_multithread(StxDiskKV& kv,
   double latency_ns = (seconds * 1e9) / (double)total_queries;
   double iops = (double)total_queries / seconds;
 
-  // *out_latency_ns = latency_ns;
-  // 真实 per-query 的平均与分位数
   double avg_ns; uint64_t p50, p90, p99;
   summarize_latency(lat_ns.get(), total_queries, &avg_ns, &p50, &p90, &p99);
   *out_latency_ns = avg_ns; *out_p50 = p50; *out_p90 = p90; *out_p99 = p99;
@@ -183,50 +167,72 @@ static int run_queries_multithread(StxDiskKV& kv,
 }
 
 int main(int argc, char* argv[]) {
-  std::string data_path  = falcon::DATASETS + std::string("books_200M_uint64_unique");            
-  std::string query_path = falcon::DATASETS + std::string("books_200M_uint64_unique.1Mtable1.bin");   
-
-  std::vector<KeyType> queries = load_queries(query_path);
-  uint64_t total_queries = queries.size();
-  // 2) 构建内存索引 + 打开数据文件
-  StxDiskKV kv;
-  if (build_index_from_data(kv, data_path.c_str(), sizeof(KeyType)) != 0) {
-    return -1;
-  }
-  printf("Index built: %zu entries, record_len=%zu, direct_io=%s\n",
-         kv.size(), sizeof(KeyType), USE_O_DIRECT ? "true" : "false");
-
-  // 3) 多线程查询压测
-  FILE* csv = fopen("stx_disk_kv_multithread.csv", "w");
-  if (!csv) { perror("open csv"); return -1; }
-  fprintf(csv, "threads,avg_latency_ns,total_wall_time_s,avg_iops,mem_time_s,io_time_s\n");
-
-  for (int t = 0; t <= 0; t++) { 
-    int threads = 1 << t;
-    uint64_t p50=0, p90=0, p99=0;
-    for (int r = 0; r < RUNS; r++) {
-      double latency=0, seconds=0, iops=0;
-      double mem_s=0, io_s=0;
-      if (run_queries_multithread(kv, queries, total_queries, threads, sizeof(KeyType),
-                                  &latency, &seconds, &iops, &p50, &p90, &p99, 
-                                  &mem_s, &io_s) != 0) {
-        fprintf(stderr, "Failed run (threads=%d, run=%d)\n", threads, r);
-        continue;
-      }
-      fprintf(csv, "%d,%.2f,%.6f,%.2f,%.6f,%.6f\n",
-            threads,
-            latency,
-            seconds,
-            iops,
-            mem_s,
-            io_s);
-      fflush(csv);
-      printf("thread=%d, time=%.6f s, latency=%.2f ns, iops=%.2f\n",
-             threads, seconds, latency, iops);
+    // Usage
+    if (argc < 3) {
+        std::cerr << "Usage:\n  " << argv[0]
+                  << " <dataset_basename> <num_keys> [max_log2_threads] [repeats]\n"
+                  << "Example:\n  " << argv[0]
+                  << " wiki_ts_200M_uint64_unique 200000000 10 3\n";
+        return 1;
     }
-    printf("Threads=%d done\n", threads);
-  }
 
-  fclose(csv);
-  return 0;
+    std::string dataset_basename = argv[1]; 
+    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
+
+    int max_exp = 10; 
+    if (argc >= 4) {
+        max_exp = std::atoi(argv[3]);
+        if (max_exp < 0) max_exp = 0;
+    }
+
+    int repeats = 3;
+    if (argc >= 5) {
+        repeats = std::atoi(argv[4]);
+        if (repeats <= 0) repeats = 1;
+    }
+
+    std::string data_file  = std::string(falcon::DATASETS) + dataset_basename;
+    std::string query_file = std::string(falcon::DATASETS) + dataset_basename + ".query.bin";
+  
+    std::vector<KeyType> queries = load_queries(query_file);
+    uint64_t total_queries = queries.size();
+
+    StxDiskKV kv;
+    if (build_index_from_data(kv, data_file.c_str(), sizeof(KeyType)) != 0) {
+      return -1;
+    }
+    printf("Index built: %zu entries, record_len=%zu, direct_io=%s\n",
+          kv.size(), sizeof(KeyType), USE_O_DIRECT ? "true" : "false");
+
+    std::string csv_name = dataset_basename + "_bplustree_multithread.csv";
+    FILE* csv = fopen(csv_name.c_str(), "w");
+    if (!csv) { perror("open csv"); return -1; }
+    fprintf(csv, "threads,avg_latency_ns,total_wall_time_s,avg_iops\n");
+
+    for (int t = 0; t <= max_exp; t++) { 
+      int threads = 1 << t;
+      uint64_t p50=0, p90=0, p99=0;
+      for (int r = 0; r < repeats; r++) {
+        double latency=0, seconds=0, iops=0;
+        double mem_s=0, io_s=0;
+        if (run_queries_multithread(kv, queries, total_queries, threads, sizeof(KeyType),
+                                    &latency, &seconds, &iops, &p50, &p90, &p99, 
+                                    &mem_s, &io_s) != 0) {
+          fprintf(stderr, "Failed run (threads=%d, run=%d)\n", threads, r);
+          continue;
+        }
+        fprintf(csv, "%d,%.2f,%.6f,%.2f\n",
+              threads,
+              latency,
+              seconds,
+              iops);
+        fflush(csv);
+        printf("thread=%d, time=%.6f s, latency=%.2f ns, iops=%.2f\n",
+              threads, seconds, latency, iops);
+      }
+      printf("Threads=%d done\n", threads);
+    }
+
+    fclose(csv);
+    return 0;
 }

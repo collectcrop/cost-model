@@ -1,7 +1,3 @@
-// aulid_multithread.cpp
-// Compile: g++ -O3 -std=c++17 aulid_multithread.cpp -o aulid_multithread -pthread
-// Usage: ./aulid_multithread <index_name> <query_file> <has_size(0|1)> <max_exp> <repeats>
-
 #include <iostream>
 #include <fstream>
 #include <vector>
@@ -15,9 +11,7 @@
 
 // include LIPPBTree header(s)
 #include "aulid/storage_management.h" 
-#include "utils/utils.hpp"
-// or the actual header where LIPPBTree is defined
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
+#include "FALCON/utils/utils.hpp"
 
 using namespace std::chrono;
 using u64 = uint64_t;
@@ -32,7 +26,7 @@ struct RunStats {
     double wall_seconds = 0;
     double avg_block_per_lookup = 0; // average bc
     double avg_inblock_per_lookup = 0; // average ic
-    double mem_time_s = 0;  // 新增
+    double mem_time_s = 0;
     double io_time_s  = 0; 
 };
 
@@ -47,13 +41,12 @@ void blipp_bulk(LIPPBTree<KeyType, ValueType> *index,
                 const char *key_path, int count) {
     index->init(const_cast<char*>(index_name), true, memory_type);
     std::ifstream fin(key_path, std::ios::binary);
-    // 先读原始数据
     std::vector<KeyType> raw_keys(count);
     fin.read(reinterpret_cast<char*>(raw_keys.data()),
              sizeof(KeyType) * count);
     fin.close();
 
-    // 去重（数据已经是排序好的）
+    // dedup
     std::vector<KeyType> keys;
     keys.reserve(raw_keys.size());
     if (!raw_keys.empty()) {
@@ -88,7 +81,6 @@ void blipp_bulk(LIPPBTree<KeyType, ValueType> *index,
     delete[] values;
 }
 
-// Worker: each线程处理自己的 queries 列表，并累计统计
 static void worker_proc(
     LIPPBTree<KeyType, ValueType>* index,
     const std::vector<KeyType>& queries,
@@ -193,47 +185,41 @@ static RunStats run_once(
 }
 
 int main(int argc, char** argv) {
-    // Usage 提示
+    // Usage
     if (argc < 3) {
         std::cerr << "Usage:\n  " << argv[0]
                   << " <dataset_basename> <num_keys> [max_log2_threads] [repeats] [index_name]\n\n"
                   << "Example:\n  " << argv[0]
-                  << " wiki_ts_10M_uint64_unique 10000000 10 3 ./index\n";
+                  << " wiki_ts_200M_uint64_unique 200000000 10 3 ./index\n";
         return 1;
     }
 
-    // 1) 必选参数
-    std::string dataset_basename = argv[1]; // e.g. wiki_ts_10M_uint64_unique
+    std::string dataset_basename = argv[1]; 
     uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
 
-    // 2) 可选：最大 log2(threads)
-    int max_exp = 10; // 默认 1..2^14
+    int max_exp = 10; 
     if (argc >= 4) {
         max_exp = std::atoi(argv[3]);
         if (max_exp < 0) max_exp = 0;
     }
 
-    // 3) 可选：每个线程数重复次数
     int repeats = 3;
     if (argc >= 5) {
         repeats = std::atoi(argv[4]);
         if (repeats <= 0) repeats = 1;
     }
 
-    // 4) 可选：索引文件名
     std::string index_name_str = "./index";
     if (argc >= 6) {
         index_name_str = argv[5];
     }
 
-    // 5) 拼接数据/查询文件路径
-    std::string data_file  = std::string(DATASETS) + dataset_basename;
-    std::string query_file = std::string(DATASETS) + dataset_basename + ".query.bin";
+    std::string data_file  = std::string(falcon::DATASETS) + dataset_basename;
+    std::string query_file = std::string(falcon::DATASETS) + dataset_basename + ".query.bin";
 
     char *index_name_c = const_cast<char*>(index_name_str.c_str());
     char *data_file_c  = const_cast<char*>(data_file.c_str());
 
-    // 6) 构建磁盘索引（bulk_load）
     std::cout << "Building AULID index from " << data_file
               << " with " << num_keys << " keys, index file = " << index_name_str << "\n";
     
@@ -243,22 +229,19 @@ int main(int argc, char** argv) {
     
     // index.init(index_name_c, false, ALL_DISK);
 
-    // 7) 读取 queries
     std::vector<KeyType> all_queries = load_queries(query_file);
     std::cout << "Loaded queries from " << query_file
               << ", count = " << all_queries.size() << std::endl;
 
-    // 8) 打开 CSV：<dataset_basename>_aulid_multithread.csv
     std::string csv_name = dataset_basename + "_aulid_multithread.csv";
     std::ofstream csv(csv_name, std::ios::out | std::ios::trunc);
     if (!csv) {
         std::cerr << "Failed to open CSV output: " << csv_name << "\n";
         return 1;
     }
-    csv << "baseline,threads,latency_ns,walltime_s,avg_IOs,mem_time_s,io_time_s\n";
+    csv << "baseline,threads,latency,walltime,avg_IOs\n";
     csv << std::fixed << std::setprecision(6);
 
-    // 9) 遍历线程数（1, 2, 4, ..., 2^max_exp）
     for (int e = 0; e <= max_exp; ++e) {
         uint64_t threads = 1ULL << e;
         if (threads > all_queries.size()) threads = all_queries.size();
@@ -275,13 +258,11 @@ int main(int argc, char** argv) {
                       << " avg_lat_ns=" << rs.avg_latency_ns
                       << " wall_s=" << rs.wall_seconds
                       << " avg_block=" << rs.avg_block_per_lookup
-                      << " avg_ic=" << rs.avg_inblock_per_lookup 
-                      << " mem_time_s=" << rs.mem_time_s 
-                      << " io_time_s=" << rs.io_time_s << "\n";;
+                      << " avg_ic=" << rs.avg_inblock_per_lookup << "\n";;
 
             csv << "AULID," << threads << "," << rs.avg_latency_ns << "," << rs.wall_seconds
                 << "," << rs.avg_block_per_lookup 
-                << "," << rs.mem_time_s << "," << rs.io_time_s << "\n";;
+                << "\n";
             csv.flush();
         }
     }

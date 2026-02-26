@@ -8,7 +8,7 @@ import pandas as pd
 # Example: if your original file is named "cam_residual.py",
 # set BASE_MODULE_NAME = "cam_residual"
 # ============================================================
-BASE_MODULE_NAME = "fit2"  # TODO: change me
+BASE_MODULE_NAME = "fitBase"  
 base = __import__(BASE_MODULE_NAME)
 
 # ============================================================

@@ -93,12 +93,10 @@ def generate_range_queries_from_data(keys, num_queries,
     if n == 0:
         raise ValueError("keys is empty")
 
-    # ---- 1. 生成起点下标 start_idx ----
+    # ---- 1. generate start position `start_idx` ----
     if start_dist == 'uniform':
-        # 均匀落在整个 key 数组的下标空间
         start_idx = np.random.randint(0, n, size=num_queries)
     elif start_dist == 'normal':
-        # 以中间为均值的高斯分布, 再截断到合法下标
         mean = n // 2
         std = n // 6
         start_idx = np.random.normal(loc=mean, scale=std, size=num_queries).astype(int)
@@ -106,7 +104,7 @@ def generate_range_queries_from_data(keys, num_queries,
     else:
         raise ValueError(f"Unsupported start_dist: {start_dist}")
 
-    # ---- 2. 生成长度 (以 key 个数为单位) ----
+    # ---- 2. generate length ----
     if length_dist == 'uniform':
         lengths = np.random.randint(1, max_length_keys + 1, size=num_queries)
     elif length_dist == 'exponential':
@@ -115,15 +113,14 @@ def generate_range_queries_from_data(keys, num_queries,
     else:
         raise ValueError(f"Unsupported length_dist: {length_dist}")
 
-    # ---- 3. 根据起点和长度计算终点下标 ----
+    # ---- 3. calculate end_idx ----
     end_idx = start_idx + lengths - 1
     end_idx = np.clip(end_idx, 0, n - 1)
 
-    # 为保险起见保证 lo_idx <= hi_idx
     lo_idx = np.minimum(start_idx, end_idx)
     hi_idx = np.maximum(start_idx, end_idx)
 
-    # ---- 4. 映射回真实 key 值 ----
+    # ---- 4. cast to keys ----
     lo_keys = keys[lo_idx]
     hi_keys = keys[hi_idx]
 
@@ -136,17 +133,11 @@ def sample_unique_mixture(
     hotpot_ratio=0.4, zipf_ratio=0.3, uniform_ratio=0.3,
     num_hotpots=5, hotpot_frac=0.01,
     hotpot_zipf_a=1.5, zipf_a=1.2,
-    oversample=20,                # 关键：一次性过采样倍数（建议 10~30）
-    min_candidates=1_000_000,     # 防止 k 很小时候采样太少
+    oversample=20,                
+    min_candidates=1_000_000,     
     return_sorted=True,
-    strict=True,                  # strict=True: 若一次性去重后仍不足 k，则报错；False: 用均匀无放回补齐
+    strict=True,                  
 ):
-    """
-    方案3：一次性生成 oversample*k 个候选 -> 按顺序去重 -> 取前 k 个唯一 key。
-    相比“反复采样补齐”，对目标分布的破坏更小。
-
-    keys: np.uint64 sorted array recommended
-    """
     keys = np.asarray(keys, dtype=np.uint64)
     n = len(keys)
     if k > n:
@@ -157,14 +148,13 @@ def sample_unique_mixture(
 
     m = max(int(k * oversample), min_candidates)
 
-    # ---- 生成 m 个候选（一次性）----
+    # ---- generate candidates----
     cand_parts = []
 
     # 1) hotspot
     m_hot = int(m * hotpot_ratio)
     if m_hot > 0:
         hotpot_size = max(1, int(hotpot_frac * n))
-        # 把 m_hot 均分到多个 hotspot
         per = int(np.ceil(m_hot / num_hotpots))
         for _ in range(num_hotpots):
             base = random.randint(0, max(0, n - hotpot_size))
@@ -191,7 +181,6 @@ def sample_unique_mixture(
     cand = np.concatenate(cand_parts).astype(np.uint64, copy=False)
     rng.shuffle(cand)
 
-    # ---- 单次按顺序去重，取前 k 个 ----
     chosen = np.empty(k, dtype=np.uint64)
     seen = set()
     cnt = 0
@@ -211,10 +200,8 @@ def sample_unique_mixture(
                 f"Not enough unique keys in one-shot oversample: got {cnt}, need {k}. "
                 f"Try larger oversample (e.g., 30/50) or reduce hotspot_ratio/Zipf skew."
             )
-        # fallback：用均匀无放回补齐（会引入少量分布偏差，但比多轮补齐小）
+        # fallback
         remain = k - cnt
-        # 从 keys 中挑剩余没选过的（注意：keys 很大时，这一步可能慢；只在极少数情况下触发）
-        # 更高效的做法是随机抽 idx 并检查 seen，直到补齐。
         extra = []
         while len(extra) < remain:
             idx = int(rng.integers(0, n))

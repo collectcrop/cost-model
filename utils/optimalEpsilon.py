@@ -13,12 +13,10 @@ DATASETS_DIRECTORY = "/mnt/backup_disk/backup_2025_full/zwshi/Datasets/SOSD/"
 LOG_DIRECTORY = "/mnt/home/zwshi/learned-index/cost-model/visualize/data/log/"
 
 def build_uniform_box_kernel(epsilon):
-    """离散均匀 box kernel 长度 L=2*epsilon+1,已归一化"""
     L = 2 * epsilon + 1
     return np.ones(L, dtype=np.float64) / L
 
 def triangular_kernel_from_box(epsilon):
-    """如果 g 和 h 都是长度 L 的均匀 box, 则 k = g*h 是三角核(长度 2L-1)"""
     L = 2 * epsilon + 1
     # discrete triangular: [1,2,3,...,L-1,L,L-1,...,1] normalized by L^2
     up = np.arange(1, L+1, dtype=np.float64)
@@ -37,9 +35,7 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
       page_counts: np.array length num_pages, expected counts per page (sum ~= Q * (2eps+1))
       T_pos: np.array length N, expected counts per position
       Q: queries length
-    """
-    # 读取 queries 支持文件或直接数组
-    
+    """    
     if isinstance(query_file, str):
         queries = np.fromfile(query_file, dtype=np.uint64)
     else:
@@ -62,16 +58,11 @@ def estimate_page_counts_from_queryfile(query_file, data, epsilon, ipp, use_fft=
     # 2) construct k = g * h. assume g = uniform box, h = uniform box => k = triangular
     k = triangular_kernel_from_box(epsilon)  # length K = 4*eps + 1, sums to 1
 
-    # 3) 卷积 H * k -> T positions (期望位置访问次数). 使用 'same' 保持长度 N
+    # 3) convolution
     if use_fft:
-        # 对于非常大 N 可考虑 FFT 卷积实现，如 scipy.signal.fftconvolve
-        
         T = fftconvolve(H, k, mode='same')
     else:
         T = np.convolve(H, k, mode='same')
-
-    # 注：每个 query 平均导致 L=2ε+1 个位置被访问 -> sum(T) ~= Q * L 。
-    # 如果需要保证 sum == Q*L, 检查 kernel sum == 1, H sum == Q -> sum(T) == Q
 
     # 4) page aggregation
     num_pages = math.ceil(N / ipp)
@@ -97,40 +88,6 @@ def extract_data_gap_distribution(data_file):
     miu = np.mean(gaps)
     sigma = np.std(gaps)
     return miu, sigma
-
-# def extract_query_distribution(filename,data,epsilon,ipp):
-#     """
-#     input:
-#         filename: query filename (binary file with uint64 keys)
-#     output:
-#         probs: np.array, where probs[i] = q(i), i.e., probability of the i-th most popular key
-#     """
-#     queries = np.fromfile(filename, dtype=np.uint64)
-#     pos = np.searchsorted(data, queries, side='right') - 1
-#     total_keys = len(data)
-#     # num_pages = int(np.ceil(total_keys / ipp))
-#     count = Counter()
-#     for p in pos:
-#         start_pos = max(0, p - epsilon)
-#         end_pos   = min(total_keys - 1, p + epsilon)
-#         total_len = end_pos - start_pos + 1
-#         start = start_pos//ipp
-#         end = end_pos//ipp
-#         for page in range(start,end+1):
-#             count[page] += 1
-#             # page_start = page * ipp
-#             # page_end   = min((page + 1) * ipp - 1, total_keys - 1)
-#             # overlap    = max(0, min(end_pos, page_end) - max(start_pos, page_start) + 1)
-#             # if overlap > 0:
-#             #     # add weight 1
-#             #     count[page] += overlap / total_len
-#     # print(count)        
-#     # count = Counter(queries)
-#     # total = len(queries)
-#     total = sum(count.values())
-#     sorted_freqs = sorted(count.values(), reverse=True)
-#     probs = np.array([f / total for f in sorted_freqs], dtype=np.float64)
-#     return probs
 
 def zipf_popularity(N, alpha):
     norm_const = sum(1 / (i ** alpha) for i in range(1, N + 1))
@@ -276,20 +233,13 @@ def model_cost_given_capacity(
     query_file="",
     s="all_in_once",
 ):
-    """
-    在给定“页数容量 C_pages”时，调用现有 cost_function 得到模型 cost。
-    注意：这里强行构造一个 M 使得 CAM 里看到的 C 就是 C_pages。
-    """
-    # 对应索引大小
+    # index size
     M_index = n * seg_size / (2 * epsilon)
 
-    # buffer 部分 = C_pages * ps
+    # buffer size
     M_buffer = C_pages * ps
 
-    # 总内存 M_eff = index + buffer
     M_eff = M_index + M_buffer
-
-    # 用原来的 cost_function 计算 cost（此时 cost_function 里算出的 C 就是 C_pages）
     cost, h = cost_function(
         epsilon,
         n,
@@ -349,14 +299,11 @@ def join_cost_function(
     if int(lengths.sum()) != Q:
         raise ValueError(f"sum(lengths)={int(lengths.sum())} != Q={Q}")
 
-    # Cache capacity (pages) — 用于检查 sorted-order “只 miss 一次” 前提是否可能被破坏
     M_index  = n * seg_size / (2 * epsilon)
     M_buffer = M - M_index
     C_pages  = M_buffer / ps
 
     C_delta  = 1 + int(math.ceil((2.0 * epsilon) / ipp))
-
-    # 辅助：把 interval [l,r] 在线并入 union（intervals 输入应当按 l 非递减）
     union_len = 0
     curL = None
     curR = None
@@ -376,7 +323,6 @@ def join_cost_function(
                 union_len += (r - curR)
                 curR = r
 
-    # 统计逻辑 page references 次数
     n_refs = 0
 
     off = 0
@@ -437,7 +383,6 @@ def join_cost_function(
     # avg physical IO per join key = distinct pages / Q
     cost = union_len / float(Q)
 
-    # 如果 cache 太小，sorted-order “只 miss 一次” 可能乐观：给出诊断信息
     detail = {
         "Q": Q,
         "n_refs": int(n_refs),
@@ -767,7 +712,6 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
 
     for eps, t in zip(eps_list, time_list):
         for name, (lo, hi) in groups.items():
-            # 左闭右开区间：[lo, hi)
             if lo <= eps < hi:
                 group_times[name].append(t)
                 break
@@ -777,8 +721,7 @@ def getExpectedCostPerEpsilon(ipp, seg_size, M, n, ps,type="uniform",data_file="
         if ts:
             group_avg_time[name] = sum(ts) / len(ts)
         else:
-            group_avg_time[name] = 0.0  # 或者 None，看你喜好
-
+            group_avg_time[name] = 0.0  
     print("group avg time:", group_avg_time)
     
     

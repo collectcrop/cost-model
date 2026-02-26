@@ -13,30 +13,30 @@
 #include <string>
 #include <cmath>
 #include "distribution/zipf.hpp"
-#include "pgm/pgm_index.hpp"
-#include "utils/utils.hpp"
+#include "FALCON/pgm/pgm_index.hpp"
+#include "FALCON/utils/utils.hpp"
+#include "./config.hpp"
 
 struct ApproxPosExt {
-    std::vector<pgm::Record> records;  // record buffer
+    std::vector<falcon::Record> records;  // record buffer
     size_t lo;      // minimal pos in buffer
     size_t hi;      // maximal pos in buffer
 };
 
 using KeyType = uint64_t;
-#define DATASETS "/mnt/home/zwshi/Datasets/SOSD/"
 #define Epsilon 16
 #define EpsilonRecur 4
 #define use_direct true
 
-struct BenchmarkResult {
-    size_t epsilon;
-    double time_ns;      // 平均 query latency (ns)
-    double total_time_s; // wall time (秒)
-    size_t data_IOs;
-    size_t height;
-    uint64_t index_cpu_ns;  
-    uint64_t io_wait_ns; 
-};
+// struct BenchmarkResult {
+//     size_t epsilon;
+//     double time_ns;      // 平均 query latency (ns)
+//     double total_time_s; // wall time (秒)
+//     size_t data_IOs;
+//     size_t height;
+//     uint64_t index_cpu_ns;  
+//     uint64_t io_wait_ns; 
+// };
 
 using timer = std::chrono::high_resolution_clock;
 
@@ -51,47 +51,47 @@ struct ThreadArgs {
 };
 
 ApproxPosExt search(size_t lo, size_t hi, int data_fd, int &IOs){
-    std::vector<pgm::Record> buffer;
+    std::vector<falcon::Record> buffer;
     
-    // std::vector<pgm::Page> pages = cache->get(lo / ITEM_PER_PAGE, hi / ITEM_PER_PAGE);
-    std::vector<pgm::Page> pages;
-    size_t offset = lo / pgm::ITEM_PER_PAGE;
-    size_t len = hi / pgm::ITEM_PER_PAGE - offset + 1;
+    // std::vector<falcon::Page> pages = cache->get(lo / ITEM_PER_PAGE, hi / ITEM_PER_PAGE);
+    std::vector<falcon::Page> pages;
+    size_t offset = lo / falcon::ITEM_PER_PAGE;
+    size_t len = hi / falcon::ITEM_PER_PAGE - offset + 1;
     void* raw = nullptr;
-    if (posix_memalign(&raw, pgm::PAGE_SIZE, pgm::PAGE_SIZE*len) != 0) {
+    if (posix_memalign(&raw, falcon::PAGE_SIZE, falcon::PAGE_SIZE*len) != 0) {
         throw std::runtime_error("posix_memalign failed");
     }
     std::shared_ptr<char[]> buf(reinterpret_cast<char*>(raw), [](char* p){ free(p); });
-    ssize_t br = pread(data_fd, buf.get(), pgm::PAGE_SIZE*len, offset*pgm::PAGE_SIZE);
+    ssize_t br = pread(data_fd, buf.get(), falcon::PAGE_SIZE*len, offset*falcon::PAGE_SIZE);
     if (br < 0){
         throw std::runtime_error(std::string("pread failed: ") + std::strerror(errno));
     }
-    size_t pages_read = (br + pgm::PAGE_SIZE - 1) / pgm::PAGE_SIZE;
+    size_t pages_read = (br + falcon::PAGE_SIZE - 1) / falcon::PAGE_SIZE;
     IOs += pages_read;
     for (size_t i = 0; i < pages_read; i++) {
-        pgm::Page page;
+        falcon::Page page;
         void* page_ptr = nullptr;
-        if (posix_memalign(&page_ptr, pgm::PAGE_SIZE, pgm::PAGE_SIZE) != 0) {
+        if (posix_memalign(&page_ptr, falcon::PAGE_SIZE, falcon::PAGE_SIZE) != 0) {
             throw std::runtime_error("posix_memalign failed for sub-page");
         }
         page.data.reset(reinterpret_cast<char*>(page_ptr), [](char* p){ free(p); });
 
-        size_t copy_size = std::min(static_cast<size_t>(br - i * pgm::PAGE_SIZE), (size_t)pgm::PAGE_SIZE);
-        memcpy(page.data.get(), buf.get() + i * pgm::PAGE_SIZE, copy_size);
+        size_t copy_size = std::min(static_cast<size_t>(br - i * falcon::PAGE_SIZE), (size_t)falcon::PAGE_SIZE);
+        memcpy(page.data.get(), buf.get() + i * falcon::PAGE_SIZE, copy_size);
 
         page.valid_len = copy_size;
         pages.push_back(std::move(page));
     }
 
     for (auto &page : pages) {
-        size_t num_records = page.valid_len / sizeof(pgm::Record);   // valid record num
-        pgm::Record* records = reinterpret_cast<pgm::Record*>(page.data.get());
+        size_t num_records = page.valid_len / sizeof(falcon::Record);   // valid record num
+        falcon::Record* records = reinterpret_cast<falcon::Record*>(page.data.get());
         buffer.insert(buffer.end(), records, records + num_records);
     }
 
-    size_t page_lo = lo / pgm::ITEM_PER_PAGE;
-    size_t rel_lo = lo % pgm::ITEM_PER_PAGE;
-    size_t rel_hi = std::min(hi - page_lo * pgm::ITEM_PER_PAGE, buffer.size());
+    size_t page_lo = lo / falcon::ITEM_PER_PAGE;
+    size_t rel_lo = lo % falcon::ITEM_PER_PAGE;
+    size_t rel_hi = std::min(hi - page_lo * falcon::ITEM_PER_PAGE, buffer.size());
     
     return {std::move(buffer), rel_lo, rel_hi};
 }
@@ -105,12 +105,11 @@ void* query_worker(void* arg) {
     for (size_t i = args->start; i < args->end; i++) {
         auto q = (*(args->queries))[i];
         auto range = args->index->search(q);
-        // std::vector<pgm::Record> records = range.records;
+        // std::vector<falcon::Record> records = range.records;
         size_t lo = range.lo;
         size_t hi = range.hi;
-        std::vector<pgm::Record> records = search(lo, hi, args->fd, IOs).records;
+        std::vector<falcon::Record> records = search(lo, hi, args->fd, IOs).records;
         binary_search_record(records.data(), lo, hi, q);
-        // 基于 lo/hi 计算该 query 的页级 I/O 量
         off_t offset = (lo * sizeof(KeyType)) & ~(PAGE - 1);
         off_t end    = ((hi + 1) * sizeof(KeyType) + PAGE - 1) & ~(PAGE - 1);
         size_t size  = end - offset;
@@ -125,13 +124,12 @@ void* query_worker(void* arg) {
                                  (c1.tv_nsec - c0.tv_nsec));
     uint64_t io_wait = (t > (long long)cpu_ns) ? (uint64_t)t - cpu_ns : 0ULL;
 
-    args->result.time_ns = (double)t / (args->end - args->start);
-    args->result.total_time_s = t / 1e9;
+    args->result.avg_lat = (double)t / (args->end - args->start);
+    args->result.total_time = t / 1e9;
     args->result.data_IOs = IOs;
     args->result.height = args->index->height();
-    args->result.index_cpu_ns = cpu_ns;
-    args->result.io_wait_ns   = io_wait;
-
+    // args->result.index_cpu_ns = cpu_ns;
+    // args->result.io_wait_ns   = io_wait;
     return nullptr;
 }
 
@@ -162,25 +160,23 @@ BenchmarkResult run_experiment(std::vector<KeyType>& queries,
 
     auto total_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
 
-    // 汇总
     BenchmarkResult r{};
     r.epsilon = Epsilon;
-    r.total_time_s = total_ns / 1e9;
+    r.total_time = total_ns / 1e9;
     r.height = index.height();
     r.data_IOs = 0;
-    r.time_ns = 0;
-    r.index_cpu_ns  = 0;
-    r.io_wait_ns    = 0;
+    r.avg_lat = 0;
+    // r.index_cpu_ns  = 0;
+    // r.io_wait_ns    = 0;
 
     for (int i = 0; i < THREADS; i++) {
-        r.time_ns += args[i].result.time_ns;
+        r.avg_lat += args[i].result.avg_lat;
         r.data_IOs += args[i].result.data_IOs;
-        r.index_cpu_ns  += args[i].result.index_cpu_ns;
-        r.io_wait_ns    += args[i].result.io_wait_ns;
+        // r.index_cpu_ns  += args[i].result.index_cpu_ns;
+        // r.io_wait_ns    += args[i].result.io_wait_ns;
     }
-    r.time_ns /= THREADS;
+    r.avg_lat /= THREADS;
 
-    // === 输出 CDF（每次 run_experiment 都会生成/覆盖）===
     std::vector<size_t> all_pages;
     all_pages.reserve(queries.size());
     for (int i = 0; i < THREADS; i++) {
@@ -206,43 +202,37 @@ int main(int argc, char** argv) {
     // helper
     if (argc < 3) {
         std::cerr << "Usage:\n  " << argv[0]
-                  << " <dataset_basename> <num_keys> [max_log2_threads] [baseline_name]\n\n"
+                  << " <dataset_basename> <num_keys> [max_log2_threads] [baseline_name]\n"
                   << "Example:\n  " << argv[0]
                   << " books_200M_uint64_unique 200000000 10 PGM-disk\n";
         return 1;
     }
 
     // 1) essential parameter
-    std::string dataset_basename = argv[1];              // 如 books_200M_uint64_unique
-    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);  // 如 200000000
+    std::string dataset_basename = argv[1];            
+    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);  
 
     // 2) optional parameter
-    int max_exp = 10;  // 默认 2^0 .. 2^10
+    int max_exp = 10;  
     if (argc >= 4) {
         max_exp = std::atoi(argv[3]);
         if (max_exp < 0) max_exp = 0;
     }
-
-    // 3) 可选参数：baseline 名字
     std::string baseline = "PGM-disk";
     if (argc >= 5) {
         baseline = argv[4];
     }
 
-    // 4) 拼接文件路径
     std::string filename       = dataset_basename;                // books_200M_uint64_unique
     std::string query_filename = dataset_basename + ".query.bin"; // books_200M_uint64_unique.query.bin
-    std::string file       = DATASETS + filename;
-    std::string query_file = DATASETS + query_filename;
+    std::string file       = falcon::DATASETS + filename;
+    std::string query_file = falcon::DATASETS + query_filename;
 
-    // 5) 加载数据
     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, 200000000);
     std::vector<KeyType> queries = load_queries_pgm_safe<KeyType>(query_file);
     
-    // 6) 构建索引
     pgm::PGMIndex<KeyType, Epsilon, EpsilonRecur> index(data);
 
-    // 7) 打开数据文件
     int data_fd;
     if (use_direct){ data_fd = open(file.c_str(), O_RDONLY | O_DIRECT); }
     else { data_fd = open(file.c_str(), O_RDONLY);}
@@ -251,7 +241,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // 8) 输出文件名：<basename>_pgm_disk_multithread.csv
     std::string out_csv = dataset_basename + "_pgm_disk_multithread.csv";
     std::ofstream ofs(out_csv);
     if (!ofs.is_open()) {
@@ -260,9 +249,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    ofs << "baseline,threads,latency_ns,walltime_s,height,avg_IOs,mem_time_s,io_time_s\n";
+    ofs << "baseline,threads,latency,walltime,height,avg_IOs\n";
 
-    // 9) 线程实验循环
     for (int exp = 0; exp <= max_exp; exp++) {
         int threads = 1 << exp;
         double avg_latency = 0;
@@ -272,23 +260,20 @@ int main(int argc, char** argv) {
 
         for (int t = 0; t < 3; t++) {
             BenchmarkResult r = run_experiment(queries, index, data_fd, threads);
-            avg_latency = r.time_ns;
-            avg_wall    = r.total_time_s;
+            avg_latency = r.avg_lat;
+            avg_wall    = r.total_time;
             avg_IOs     = r.data_IOs;
             height      = r.height;
-            double mem_time_s = r.index_cpu_ns / 1e9;
-            double io_time_s  = r.io_wait_ns   / 1e9;
+            // double mem_time_s = r.index_cpu_ns / 1e9;
+            // double io_time_s  = r.io_wait_ns   / 1e9;
             std::cout << "threads=" << threads
                       << ", avg_latency=" << avg_latency << " ns"
                       << ", wall=" << avg_wall << " s"
                       << ", IOs=" << avg_IOs
-                      << ", height=" << height 
-                      << ", mem_time_s=" << mem_time_s
-                      << ", io_time_s=" << io_time_s << std::endl;
+                      << ", height=" << height << std::endl;
 
             ofs << baseline << "," << threads << "," << avg_latency << "," << avg_wall
-                << "," << height << "," << avg_IOs 
-                << "," << mem_time_s << "," << io_time_s <<"\n";
+                << "," << height << "," << avg_IOs << "\n";
         }
     }
 

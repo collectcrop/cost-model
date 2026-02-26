@@ -25,7 +25,6 @@ int StxDiskKV::open_data_file(const std::string& path, bool direct_io) {
 #endif
   int fd = ::open(path.c_str(), flags);
   if (fd < 0 && errno == EPERM && (flags & O_NOATIME)) {
-    // 再试一次去掉 NOATIME
     flags &= ~O_NOATIME;
     fd = ::open(path.c_str(), flags);
   }
@@ -33,7 +32,7 @@ int StxDiskKV::open_data_file(const std::string& path, bool direct_io) {
 
   data_fd_   = fd;
   direct_io_ = direct_io;
-  dio_align_ = 4096; // 简化：按 4K 对齐；必要时可用 fstatfs/blkid 探测
+  dio_align_ = 4096; 
   return 0;
 }
 
@@ -83,12 +82,9 @@ size_t StxDiskKV::size() const {
 
 ssize_t StxDiskKV::pread_aligned(void* user_buf, size_t len, off_t off) const {
   if (!direct_io_) {
-    // 普通 pread
     ssize_t n = ::pread(data_fd_, user_buf, len, off);
     return (n < 0) ? -errno : n;
   }
-
-  // O_DIRECT：要求 (buf, len, off) 全部按对齐
   const size_t A = dio_align_;
   bool aligned_buf = ((uintptr_t)user_buf % A) == 0;
   bool aligned_len = (len % A) == 0;
@@ -99,7 +95,7 @@ ssize_t StxDiskKV::pread_aligned(void* user_buf, size_t len, off_t off) const {
     return (n < 0) ? -errno : n;
   }
 
-  // 需要 bounce buffer：扩大到对齐边界
+  // need bounce buffer
   off_t  start_off = (off_t)((off / (off_t)A) * (off_t)A);
   size_t head_skip = (size_t)(off - start_off);
   size_t need      = head_skip + len;
@@ -117,7 +113,7 @@ ssize_t StxDiskKV::pread_aligned(void* user_buf, size_t len, off_t off) const {
   size_t can_copy = std::min((size_t)n, io_len);
   if (can_copy < head_skip) {
     free(bounce);
-    return 0; // 文件太短
+    return 0; 
   }
   size_t avail = can_copy - head_skip;
   size_t tocpy = std::min(avail, len);

@@ -57,7 +57,7 @@ target_link_libraries(falcon_core
 )
 
 # =========================
-# Benchmark Logic Library
+# Benchmark Library
 # =========================
 add_library(falcon_bench_lib
     # experiments/point_bench.cpp
@@ -76,8 +76,13 @@ target_link_libraries(falcon_bench_lib
     PUBLIC falcon_core
 )
 
+add_library(bplustree STATIC
+    include/bplustree/stx_disk_kv.cpp
+)
+target_include_directories(bplustree PUBLIC include)
+
 # =========================
-# Unified Benchmark Executable
+# Benchmark Executable
 # =========================
 add_executable(falcon_bench
     experiments/main.cpp
@@ -89,7 +94,34 @@ target_link_libraries(falcon_bench
         CLI11::CLI11
 )
 
+add_executable(pgm_disk_test
+    experiments/benchmark/pgm_disk_test.cpp
+)
+target_include_directories(pgm_disk_test PUBLIC include)
+target_link_libraries(pgm_disk_test 
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+)
 
+add_executable(aulid_test
+    experiments/benchmark/aulid_test.cpp
+)
+target_include_directories(aulid_test PUBLIC include)
+target_link_libraries(aulid_test 
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+)
+
+
+add_executable(bplustree_test
+    experiments/benchmark/bplustree_test.cpp
+)
+target_include_directories(bplustree_test PUBLIC include)
+target_link_libraries(bplustree_test 
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+    PRIVATE bplustree
+)
 # ================
 # FALCON benchmarks
 # ================

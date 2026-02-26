@@ -283,7 +283,8 @@ private:
     struct inner_node : public node
     {
         /// Define an related allocator for the inner_node structs.
-        typedef typename _Alloc::template rebind<inner_node>::other alloc_type;
+        // typedef typename _Alloc::template rebind<inner_node>::other alloc_type;
+        typedef typename std::allocator_traits<_Alloc>::template rebind_alloc<inner_node> alloc_type;
 
         /// Keys of children or data pointers
         key_type slotkey[innerslotmax];
@@ -326,7 +327,8 @@ private:
     struct leaf_node : public node
     {
         /// Define an related allocator for the leaf_node structs.
-        typedef typename _Alloc::template rebind<leaf_node>::other alloc_type;
+        // typedef typename _Alloc::template rebind<leaf_node>::other alloc_type;
+        typedef typename std::allocator_traits<_Alloc>::template rebind_alloc<leaf_node> alloc_type;
 
         /// Double linked list pointers to traverse the leaves
         leaf_node * prevleaf;
@@ -1486,14 +1488,16 @@ private:
         if (n->isleafnode()) {
             leaf_node* ln = static_cast<leaf_node*>(n);
             typename leaf_node::alloc_type a(leaf_node_allocator());
-            a.destroy(ln);
+            // a.destroy(ln);
+            std::allocator_traits<typename leaf_node::alloc_type>::destroy(a, ln);
             a.deallocate(ln, 1);
             m_stats.leaves--;
         }
         else {
             inner_node* in = static_cast<inner_node*>(n);
             typename inner_node::alloc_type a(inner_node_allocator());
-            a.destroy(in);
+            // a.destroy(in);
+            std::allocator_traits<typename inner_node::alloc_type>::destroy(a, in);
             a.deallocate(in, 1);
             m_stats.innernodes--;
         }
