@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#include <CLI/CLI.hpp>
 #include "bplustree/stx_disk_kv.h"  
 #include "FALCON/utils/include.hpp"
 #include "FALCON/utils/utils.hpp"
@@ -166,73 +167,222 @@ static int run_queries_multithread(StxDiskKV& kv,
   return 0;
 }
 
+// int main(int argc, char* argv[]) {
+//     // Usage
+//     if (argc < 3) {
+//         std::cerr << "Usage:\n  " << argv[0]
+//                   << " <dataset_basename> <num_keys> [max_log2_threads] [repeats]\n"
+//                   << "Example:\n  " << argv[0]
+//                   << " wiki_ts_200M_uint64_unique 200000000 10 3\n";
+//         return 1;
+//     }
+
+//     std::string dataset_basename = argv[1]; 
+//     uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
+
+//     int max_exp = 10; 
+//     if (argc >= 4) {
+//         max_exp = std::atoi(argv[3]);
+//         if (max_exp < 0) max_exp = 0;
+//     }
+
+//     int repeats = 3;
+//     if (argc >= 5) {
+//         repeats = std::atoi(argv[4]);
+//         if (repeats <= 0) repeats = 1;
+//     }
+
+//     std::string data_file  = std::string(falcon::DATASETS) + dataset_basename;
+//     std::string query_file = std::string(falcon::DATASETS) + dataset_basename + ".query.bin";
+  
+//     std::vector<KeyType> queries = load_queries(query_file);
+//     uint64_t total_queries = queries.size();
+
+//     StxDiskKV kv;
+//     if (build_index_from_data(kv, data_file.c_str(), sizeof(KeyType)) != 0) {
+//       return -1;
+//     }
+//     printf("Index built: %zu entries, record_len=%zu, direct_io=%s\n",
+//           kv.size(), sizeof(KeyType), USE_O_DIRECT ? "true" : "false");
+
+//     std::string csv_name = dataset_basename + "_bplustree_multithread.csv";
+//     FILE* csv = fopen(csv_name.c_str(), "w");
+//     if (!csv) { perror("open csv"); return -1; }
+//     fprintf(csv, "threads,avg_latency_ns,total_wall_time_s,avg_iops\n");
+
+//     for (int t = 0; t <= max_exp; t++) { 
+//       int threads = 1 << t;
+//       uint64_t p50=0, p90=0, p99=0;
+//       for (int r = 0; r < repeats; r++) {
+//         double latency=0, seconds=0, iops=0;
+//         double mem_s=0, io_s=0;
+//         if (run_queries_multithread(kv, queries, total_queries, threads, sizeof(KeyType),
+//                                     &latency, &seconds, &iops, &p50, &p90, &p99, 
+//                                     &mem_s, &io_s) != 0) {
+//           fprintf(stderr, "Failed run (threads=%d, run=%d)\n", threads, r);
+//           continue;
+//         }
+//         fprintf(csv, "%d,%.2f,%.6f,%.2f\n",
+//               threads,
+//               latency,
+//               seconds,
+//               iops);
+//         fflush(csv);
+//         printf("thread=%d, time=%.6f s, latency=%.2f ns, iops=%.2f\n",
+//               threads, seconds, latency, iops);
+//       }
+//       printf("Threads=%d done\n", threads);
+//     }
+
+//     fclose(csv);
+//     return 0;
+// }
+
 int main(int argc, char* argv[]) {
-    // Usage
-    if (argc < 3) {
-        std::cerr << "Usage:\n  " << argv[0]
-                  << " <dataset_basename> <num_keys> [max_log2_threads] [repeats]\n"
-                  << "Example:\n  " << argv[0]
-                  << " wiki_ts_200M_uint64_unique 200000000 10 3\n";
-        return 1;
-    }
+    CLI::App app{"B+Tree multithread benchmark"};
 
-    std::string dataset_basename = argv[1]; 
-    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
+    std::string dataset_basename;
+    uint64_t num_keys = 0;
+    int max_exp = 10;
+    int repeat = 3;
+    std::string baseline = "B+Tree";
+    std::string output_csv;
 
-    int max_exp = 10; 
-    if (argc >= 4) {
-        max_exp = std::atoi(argv[3]);
-        if (max_exp < 0) max_exp = 0;
-    }
+    app.add_option(
+        "--dataset",
+        dataset_basename,
+        "Dataset basename, e.g. wiki_ts_200M_uint64_unique"
+    )->required();
 
-    int repeats = 3;
-    if (argc >= 5) {
-        repeats = std::atoi(argv[4]);
-        if (repeats <= 0) repeats = 1;
-    }
+    app.add_option(
+        "--keys",
+        num_keys,
+        "Number of keys in the dataset"
+    )->required();
+
+    app.add_option(
+        "--max-exp",
+        max_exp,
+        "Maximum thread exponent; test 1,2,4,...,2^max-exp"
+    )->default_val(10);
+
+    app.add_option(
+        "--repeat",
+        repeat,
+        "Number of repetitions for each thread count"
+    )->default_val(3);
+
+    app.add_option(
+        "--baseline",
+        baseline,
+        "Baseline name written to CSV"
+    )->default_val("B+Tree");
+
+    app.add_option(
+        "--output",
+        output_csv,
+        "Output CSV filename (default: <dataset>_bplustree_multithread.csv)"
+    );
+
+    CLI11_PARSE(app, argc, argv);
+
+    if (max_exp < 0) max_exp = 0;
+    if (repeat <= 0) repeat = 1;
 
     std::string data_file  = std::string(falcon::DATASETS) + dataset_basename;
     std::string query_file = std::string(falcon::DATASETS) + dataset_basename + ".query.bin";
-  
+
+    if (output_csv.empty()) {
+        output_csv = dataset_basename + "_bplustree_multithread.csv";
+    }
+
+    std::cout << "Loading queries from: " << query_file << "\n";
     std::vector<KeyType> queries = load_queries(query_file);
     uint64_t total_queries = queries.size();
 
+    if (queries.empty()) {
+        std::cerr << "Failed to load queries or query file is empty: " << query_file << "\n";
+        return 1;
+    }
+
+    std::cout << "Building B+Tree index from: " << data_file
+              << " with " << num_keys << " keys\n";
+
     StxDiskKV kv;
     if (build_index_from_data(kv, data_file.c_str(), sizeof(KeyType)) != 0) {
-      return -1;
+        std::cerr << "Failed to build B+Tree index from data file: " << data_file << "\n";
+        return 1;
     }
-    printf("Index built: %zu entries, record_len=%zu, direct_io=%s\n",
-          kv.size(), sizeof(KeyType), USE_O_DIRECT ? "true" : "false");
 
-    std::string csv_name = dataset_basename + "_bplustree_multithread.csv";
-    FILE* csv = fopen(csv_name.c_str(), "w");
-    if (!csv) { perror("open csv"); return -1; }
-    fprintf(csv, "threads,avg_latency_ns,total_wall_time_s,avg_iops\n");
+    std::printf("Index built: %zu entries, record_len=%zu, direct_io=%s\n",
+                kv.size(), sizeof(KeyType), USE_O_DIRECT ? "true" : "false");
 
-    for (int t = 0; t <= max_exp; t++) { 
-      int threads = 1 << t;
-      uint64_t p50=0, p90=0, p99=0;
-      for (int r = 0; r < repeats; r++) {
-        double latency=0, seconds=0, iops=0;
-        double mem_s=0, io_s=0;
-        if (run_queries_multithread(kv, queries, total_queries, threads, sizeof(KeyType),
-                                    &latency, &seconds, &iops, &p50, &p90, &p99, 
-                                    &mem_s, &io_s) != 0) {
-          fprintf(stderr, "Failed run (threads=%d, run=%d)\n", threads, r);
-          continue;
+    FILE* csv = std::fopen(output_csv.c_str(), "w");
+    if (!csv) {
+        std::perror("open csv");
+        return 1;
+    }
+
+    std::fprintf(csv,
+                 "baseline,threads,run_id,avg_latency_ns,total_wall_time_s,avg_iops,p50_ns,p90_ns,p99_ns,mem_time_s,io_time_s\n");
+
+    for (int t = 0; t <= max_exp; t++) {
+        int threads = 1 << t;
+        if (threads <= 0) threads = 1;
+        if (static_cast<uint64_t>(threads) > total_queries) {
+            threads = static_cast<int>(total_queries == 0 ? 1 : total_queries);
         }
-        fprintf(csv, "%d,%.2f,%.6f,%.2f\n",
-              threads,
-              latency,
-              seconds,
-              iops);
-        fflush(csv);
-        printf("thread=%d, time=%.6f s, latency=%.2f ns, iops=%.2f\n",
-              threads, seconds, latency, iops);
-      }
-      printf("Threads=%d done\n", threads);
+
+        std::cout << "Testing threads=" << threads
+                  << ", repeats=" << repeat << " ...\n";
+
+        for (int r = 0; r < repeat; r++) {
+            double latency = 0.0, seconds = 0.0, iops = 0.0;
+            double mem_s = 0.0, io_s = 0.0;
+            uint64_t p50 = 0, p90 = 0, p99 = 0;
+
+            if (run_queries_multithread(kv, queries, total_queries, threads, sizeof(KeyType),
+                                        &latency, &seconds, &iops,
+                                        &p50, &p90, &p99,
+                                        &mem_s, &io_s) != 0) {
+                std::fprintf(stderr, "Failed run (threads=%d, run=%d)\n", threads, r);
+                continue;
+            }
+
+            std::fprintf(csv,
+                         "%s,%d,%d,%.2f,%.6f,%.2f,%llu,%llu,%llu,%.6f,%.6f\n",
+                         baseline.c_str(),
+                         threads,
+                         r,
+                         latency,
+                         seconds,
+                         iops,
+                         static_cast<unsigned long long>(p50),
+                         static_cast<unsigned long long>(p90),
+                         static_cast<unsigned long long>(p99),
+                         mem_s,
+                         io_s);
+            std::fflush(csv);
+
+            std::printf("[%s][run=%d/%d][T=%d] time=%.6f s, latency=%.2f ns, iops=%.2f, "
+                        "p50=%llu, p90=%llu, p99=%llu, mem_s=%.6f, io_s=%.6f\n",
+                        baseline.c_str(),
+                        r + 1, repeat,
+                        threads,
+                        seconds,
+                        latency,
+                        iops,
+                        static_cast<unsigned long long>(p50),
+                        static_cast<unsigned long long>(p90),
+                        static_cast<unsigned long long>(p99),
+                        mem_s,
+                        io_s);
+        }
+
+        std::printf("Threads=%d done\n", threads);
     }
 
-    fclose(csv);
+    std::fclose(csv);
+    std::cout << "Finished. Results saved to " << output_csv << "\n";
     return 0;
 }

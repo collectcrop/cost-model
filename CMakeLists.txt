@@ -101,6 +101,17 @@ target_include_directories(pgm_disk_test PUBLIC include)
 target_link_libraries(pgm_disk_test 
     PUBLIC Threads::Threads
     PUBLIC OpenMP::OpenMP_CXX
+    PUBLIC CLI11::CLI11
+)
+
+add_executable(pgm_disk_range_test
+    experiments/benchmark/pgm_disk_range_test.cpp
+)
+target_include_directories(pgm_disk_range_test PUBLIC include)
+target_link_libraries(pgm_disk_range_test 
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+    PUBLIC CLI11::CLI11
 )
 
 add_executable(aulid_test
@@ -110,8 +121,18 @@ target_include_directories(aulid_test PUBLIC include)
 target_link_libraries(aulid_test 
     PUBLIC Threads::Threads
     PUBLIC OpenMP::OpenMP_CXX
+    PUBLIC CLI11::CLI11
 )
 
+add_executable(aulid_range_test
+    experiments/benchmark/aulid_range_test.cpp
+)
+target_include_directories(aulid_range_test PUBLIC include)
+target_link_libraries(aulid_range_test 
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+    PUBLIC CLI11::CLI11
+)
 
 add_executable(bplustree_test
     experiments/benchmark/bplustree_test.cpp
@@ -121,6 +142,18 @@ target_link_libraries(bplustree_test
     PUBLIC Threads::Threads
     PUBLIC OpenMP::OpenMP_CXX
     PRIVATE bplustree
+    PUBLIC CLI11::CLI11
+)
+
+add_executable(bplustree_range_test
+    experiments/benchmark/bplustree_range_test.cpp
+)
+target_include_directories(bplustree_range_test PUBLIC include)
+target_link_libraries(bplustree_range_test 
+    PUBLIC Threads::Threads
+    PUBLIC OpenMP::OpenMP_CXX
+    PRIVATE bplustree
+    PUBLIC CLI11::CLI11
 )
 
 add_executable(page_fetch_test

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <iomanip>
 
+#include <CLI/CLI.hpp>
 // include LIPPBTree header(s)
 #include "aulid/storage_management.h" 
 #include "FALCON/utils/utils.hpp"
@@ -184,62 +185,185 @@ static RunStats run_once(
     return rs;
 }
 
+// int main(int argc, char** argv) {
+//     // Usage
+//     if (argc < 3) {
+//         std::cerr << "Usage:\n  " << argv[0]
+//                   << " <dataset_basename> <num_keys> [max_log2_threads] [repeats] [index_name]\n\n"
+//                   << "Example:\n  " << argv[0]
+//                   << " wiki_ts_200M_uint64_unique 200000000 10 3 ./index\n";
+//         return 1;
+//     }
+
+//     std::string dataset_basename = argv[1]; 
+//     uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
+
+//     int max_exp = 10; 
+//     if (argc >= 4) {
+//         max_exp = std::atoi(argv[3]);
+//         if (max_exp < 0) max_exp = 0;
+//     }
+
+//     int repeats = 3;
+//     if (argc >= 5) {
+//         repeats = std::atoi(argv[4]);
+//         if (repeats <= 0) repeats = 1;
+//     }
+
+//     std::string index_name_str = "./index";
+//     if (argc >= 6) {
+//         index_name_str = argv[5];
+//     }
+
+//     std::string data_file  = std::string(falcon::DATASETS) + dataset_basename;
+//     std::string query_file = std::string(falcon::DATASETS) + dataset_basename + ".query.bin";
+
+//     char *index_name_c = const_cast<char*>(index_name_str.c_str());
+//     char *data_file_c  = const_cast<char*>(data_file.c_str());
+
+//     std::cout << "Building AULID index from " << data_file
+//               << " with " << num_keys << " keys, index file = " << index_name_str << "\n";
+    
+//     LIPPBTree<KeyType, ValueType> index;
+//     blipp_bulk(&index, LEAF_DISK, index_name_c, data_file_c, (int)num_keys);
+
+    
+//     // index.init(index_name_c, false, ALL_DISK);
+
+//     std::vector<KeyType> all_queries = load_queries(query_file);
+//     std::cout << "Loaded queries from " << query_file
+//               << ", count = " << all_queries.size() << std::endl;
+
+//     std::string csv_name = dataset_basename + "_aulid_multithread.csv";
+//     std::ofstream csv(csv_name, std::ios::out | std::ios::trunc);
+//     if (!csv) {
+//         std::cerr << "Failed to open CSV output: " << csv_name << "\n";
+//         return 1;
+//     }
+//     csv << "baseline,threads,latency,walltime,avg_IOs\n";
+//     csv << std::fixed << std::setprecision(6);
+
+//     for (int e = 0; e <= max_exp; ++e) {
+//         uint64_t threads = 1ULL << e;
+//         if (threads > all_queries.size()) threads = all_queries.size();
+//         if (threads == 0) threads = 1;
+
+//         std::cout << "Testing threads=" << threads
+//                   << " repeats=" << repeats << " ...\n";
+
+
+//         for (int r = 0; r < repeats; ++r) {
+//             RunStats rs = run_once(&index, all_queries, static_cast<int>(threads));
+//             std::cout << "  run " << (r + 1)
+//                       << " threads=" << threads
+//                       << " avg_lat_ns=" << rs.avg_latency_ns
+//                       << " wall_s=" << rs.wall_seconds
+//                       << " avg_block=" << rs.avg_block_per_lookup
+//                       << " avg_ic=" << rs.avg_inblock_per_lookup << "\n";;
+
+//             csv << "AULID," << threads << "," << rs.avg_latency_ns << "," << rs.wall_seconds
+//                 << "," << rs.avg_block_per_lookup 
+//                 << "\n";
+//             csv.flush();
+//         }
+//     }
+
+//     csv.close();
+//     std::cout << "Finished. Results saved to " << csv_name << "\n";
+//     return 0;
+// }
+
 int main(int argc, char** argv) {
-    // Usage
-    if (argc < 3) {
-        std::cerr << "Usage:\n  " << argv[0]
-                  << " <dataset_basename> <num_keys> [max_log2_threads] [repeats] [index_name]\n\n"
-                  << "Example:\n  " << argv[0]
-                  << " wiki_ts_200M_uint64_unique 200000000 10 3 ./index\n";
-        return 1;
-    }
+    CLI::App app{"AULID multithread benchmark"};
 
-    std::string dataset_basename = argv[1]; 
-    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);
+    std::string dataset_basename;
+    uint64_t num_keys = 0;
+    int max_exp = 10;
+    int repeat = 3;
+    std::string baseline = "AULID";
+    std::string output_csv;
+    std::string index_name = "./index";
 
-    int max_exp = 10; 
-    if (argc >= 4) {
-        max_exp = std::atoi(argv[3]);
-        if (max_exp < 0) max_exp = 0;
-    }
+    app.add_option(
+        "--dataset",
+        dataset_basename,
+        "Dataset basename, e.g. wiki_ts_200M_uint64_unique"
+    )->required();
 
-    int repeats = 3;
-    if (argc >= 5) {
-        repeats = std::atoi(argv[4]);
-        if (repeats <= 0) repeats = 1;
-    }
+    app.add_option(
+        "--keys",
+        num_keys,
+        "Number of keys to load/build"
+    )->required();
 
-    std::string index_name_str = "./index";
-    if (argc >= 6) {
-        index_name_str = argv[5];
-    }
+    app.add_option(
+        "--max-exp",
+        max_exp,
+        "Maximum thread exponent; test 1,2,4,...,2^max-exp"
+    )->default_val(10);
+
+    app.add_option(
+        "--repeat",
+        repeat,
+        "Number of repetitions for each thread count"
+    )->default_val(3);
+
+    app.add_option(
+        "--baseline",
+        baseline,
+        "Baseline name written to CSV"
+    )->default_val("AULID");
+
+    app.add_option(
+        "--index",
+        index_name,
+        "Index file path / prefix used by AULID"
+    )->default_val("./index");
+
+    app.add_option(
+        "--output",
+        output_csv,
+        "Output CSV filename (default: <dataset>_aulid_multithread.csv)"
+    );
+
+    CLI11_PARSE(app, argc, argv);
+
+    if (max_exp < 0) max_exp = 0;
+    if (repeat <= 0) repeat = 1;
 
     std::string data_file  = std::string(falcon::DATASETS) + dataset_basename;
     std::string query_file = std::string(falcon::DATASETS) + dataset_basename + ".query.bin";
 
-    char *index_name_c = const_cast<char*>(index_name_str.c_str());
-    char *data_file_c  = const_cast<char*>(data_file.c_str());
+    if (output_csv.empty()) {
+        output_csv = dataset_basename + "_aulid_multithread.csv";
+    }
+
+    char* index_name_c = const_cast<char*>(index_name.c_str());
+    char* data_file_c  = const_cast<char*>(data_file.c_str());
 
     std::cout << "Building AULID index from " << data_file
-              << " with " << num_keys << " keys, index file = " << index_name_str << "\n";
-    
-    LIPPBTree<KeyType, ValueType> index;
-    blipp_bulk(&index, LEAF_DISK, index_name_c, data_file_c, (int)num_keys);
+              << " with " << num_keys
+              << " keys, index file = " << index_name << "\n";
 
-    
-    // index.init(index_name_c, false, ALL_DISK);
+    LIPPBTree<KeyType, ValueType> index;
+    blipp_bulk(&index, LEAF_DISK, index_name_c, data_file_c, static_cast<int>(num_keys));
 
     std::vector<KeyType> all_queries = load_queries(query_file);
     std::cout << "Loaded queries from " << query_file
-              << ", count = " << all_queries.size() << std::endl;
+              << ", count = " << all_queries.size() << "\n";
 
-    std::string csv_name = dataset_basename + "_aulid_multithread.csv";
-    std::ofstream csv(csv_name, std::ios::out | std::ios::trunc);
-    if (!csv) {
-        std::cerr << "Failed to open CSV output: " << csv_name << "\n";
+    if (all_queries.empty()) {
+        std::cerr << "Query file is empty or failed to load: " << query_file << "\n";
         return 1;
     }
-    csv << "baseline,threads,latency,walltime,avg_IOs\n";
+
+    std::ofstream csv(output_csv, std::ios::out | std::ios::trunc);
+    if (!csv.is_open()) {
+        std::cerr << "Failed to open CSV output: " << output_csv << "\n";
+        return 1;
+    }
+
+    csv << "baseline,threads,run_id,latency_ns,walltime_s,avg_IOs\n";
     csv << std::fixed << std::setprecision(6);
 
     for (int e = 0; e <= max_exp; ++e) {
@@ -248,26 +372,32 @@ int main(int argc, char** argv) {
         if (threads == 0) threads = 1;
 
         std::cout << "Testing threads=" << threads
-                  << " repeats=" << repeats << " ...\n";
+                  << ", repeats=" << repeat << " ...\n";
 
-
-        for (int r = 0; r < repeats; ++r) {
+        for (int r = 0; r < repeat; ++r) {
             RunStats rs = run_once(&index, all_queries, static_cast<int>(threads));
-            std::cout << "  run " << (r + 1)
-                      << " threads=" << threads
+
+            std::cout << "[" << baseline << "]"
+                      << "[run=" << (r + 1) << "/" << repeat << "]"
+                      << "[T=" << threads << "]"
                       << " avg_lat_ns=" << rs.avg_latency_ns
                       << " wall_s=" << rs.wall_seconds
                       << " avg_block=" << rs.avg_block_per_lookup
-                      << " avg_ic=" << rs.avg_inblock_per_lookup << "\n";;
+                      << " avg_ic=" << rs.avg_inblock_per_lookup
+                      << "\n";
 
-            csv << "AULID," << threads << "," << rs.avg_latency_ns << "," << rs.wall_seconds
-                << "," << rs.avg_block_per_lookup 
+            csv << baseline << ","
+                << threads << ","
+                << r << ","
+                << rs.avg_latency_ns << ","
+                << rs.wall_seconds << ","
+                << rs.avg_block_per_lookup
                 << "\n";
             csv.flush();
         }
     }
 
     csv.close();
-    std::cout << "Finished. Results saved to " << csv_name << "\n";
+    std::cout << "Finished. Results saved to " << output_csv << "\n";
     return 0;
 }

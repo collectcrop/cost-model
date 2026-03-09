@@ -36,7 +36,6 @@ int main(int argc, char** argv) {
     point_cmd->add_option("--keys", base.num_keys, "Number of keys")->required();
     point_cmd->add_option("--repeats", base.repeats);
     point_cmd->add_option("--memory", base.memory_mb);
-    point_cmd->add_option("--baseline", base.baseline);
 
     // =========================
     // Epsilon Benchmark

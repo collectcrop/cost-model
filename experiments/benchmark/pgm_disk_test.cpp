@@ -12,6 +12,7 @@
 #include <chrono>
 #include <string>
 #include <cmath>
+#include <CLI/CLI.hpp>
 #include "distribution/zipf.hpp"
 #include "FALCON/pgm/pgm_index.hpp"
 #include "FALCON/utils/utils.hpp"
@@ -198,50 +199,147 @@ BenchmarkResult run_experiment(std::vector<KeyType>& queries,
     return r;
 }
 
+// int main(int argc, char** argv) {
+//     // helper
+//     if (argc < 3) {
+//         std::cerr << "Usage:\n  " << argv[0]
+//                   << " <dataset_basename> <num_keys> [max_log2_threads] [baseline_name]\n"
+//                   << "Example:\n  " << argv[0]
+//                   << " books_200M_uint64_unique 200000000 10 PGM-disk\n";
+//         return 1;
+//     }
+
+//     // 1) essential parameter
+//     std::string dataset_basename = argv[1];            
+//     uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);  
+
+//     // 2) optional parameter
+//     int max_exp = 10;  
+//     if (argc >= 4) {
+//         max_exp = std::atoi(argv[3]);
+//         if (max_exp < 0) max_exp = 0;
+//     }
+//     std::string baseline = "PGM-disk";
+//     if (argc >= 5) {
+//         baseline = argv[4];
+//     }
+
+//     std::string filename       = dataset_basename;                // books_200M_uint64_unique
+//     std::string query_filename = dataset_basename + ".query.bin"; // books_200M_uint64_unique.query.bin
+//     std::string file       = falcon::DATASETS + filename;
+//     std::string query_file = falcon::DATASETS + query_filename;
+
+//     std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, 200000000);
+//     std::vector<KeyType> queries = load_queries_pgm_safe<KeyType>(query_file);
+    
+//     pgm::PGMIndex<KeyType, Epsilon, EpsilonRecur> index(data);
+
+//     int data_fd;
+//     if (use_direct){ data_fd = open(file.c_str(), O_RDONLY | O_DIRECT); }
+//     else { data_fd = open(file.c_str(), O_RDONLY);}
+//     if (data_fd < 0) {
+//         perror("open data file");
+//         return 1;
+//     }
+
+//     std::string out_csv = dataset_basename + "_pgm_disk_multithread.csv";
+//     std::ofstream ofs(out_csv);
+//     if (!ofs.is_open()) {
+//         std::cerr << "Failed to open output csv: " << out_csv << "\n";
+//         close(data_fd);
+//         return 1;
+//     }
+
+//     ofs << "baseline,threads,latency,walltime,height,avg_IOs\n";
+
+//     for (int exp = 0; exp <= max_exp; exp++) {
+//         int threads = 1 << exp;
+//         double avg_latency = 0;
+//         double avg_wall    = 0;
+//         size_t avg_IOs     = 0;
+//         size_t height      = 0;
+
+//         for (int t = 0; t < 3; t++) {
+//             BenchmarkResult r = run_experiment(queries, index, data_fd, threads);
+//             avg_latency = r.avg_lat;
+//             avg_wall    = r.total_time;
+//             avg_IOs     = r.data_IOs;
+//             height      = r.height;
+//             // double mem_time_s = r.index_cpu_ns / 1e9;
+//             // double io_time_s  = r.io_wait_ns   / 1e9;
+//             std::cout << "threads=" << threads
+//                       << ", avg_latency=" << avg_latency << " ns"
+//                       << ", wall=" << avg_wall << " s"
+//                       << ", IOs=" << avg_IOs
+//                       << ", height=" << height << std::endl;
+
+//             ofs << baseline << "," << threads << "," << avg_latency << "," << avg_wall
+//                 << "," << height << "," << avg_IOs << "\n";
+//         }
+//     }
+
+//     ofs.close();
+//     close(data_fd);
+//     return 0;
+// }
+
 int main(int argc, char** argv) {
-    // helper
-    if (argc < 3) {
-        std::cerr << "Usage:\n  " << argv[0]
-                  << " <dataset_basename> <num_keys> [max_log2_threads] [baseline_name]\n"
-                  << "Example:\n  " << argv[0]
-                  << " books_200M_uint64_unique 200000000 10 PGM-disk\n";
-        return 1;
-    }
+    CLI::App app{"PGM disk multithread benchmark"};
 
-    // 1) essential parameter
-    std::string dataset_basename = argv[1];            
-    uint64_t num_keys = std::strtoull(argv[2], nullptr, 10);  
-
-    // 2) optional parameter
-    int max_exp = 10;  
-    if (argc >= 4) {
-        max_exp = std::atoi(argv[3]);
-        if (max_exp < 0) max_exp = 0;
-    }
+    std::string dataset_basename;
+    uint64_t num_keys = 0;
+    int max_exp = 10;
     std::string baseline = "PGM-disk";
-    if (argc >= 5) {
-        baseline = argv[4];
-    }
+    int repeat = 3;
+    bool direct = true;
+    std::string out_csv = "";
 
-    std::string filename       = dataset_basename;                // books_200M_uint64_unique
-    std::string query_filename = dataset_basename + ".query.bin"; // books_200M_uint64_unique.query.bin
+    app.add_option("--dataset", dataset_basename, "Dataset basename, e.g. books_200M_uint64_unique")->required();
+    app.add_option("--keys", num_keys, "Number of keys to load")->required();
+    app.add_option("--max-exp", max_exp, "Maximum thread exponent; test 1,2,4,...,2^max-exp")->default_val(10);
+    app.add_option("--baseline", baseline, "Baseline name written to CSV")->default_val("PGM-disk");
+    app.add_option("--repeat", repeat, "Number of repetitions for each thread count")->default_val(3);
+    app.add_flag("--direct,!--no-direct", direct, "Use O_DIRECT when opening data file")->default_val(true);
+    app.add_option("--output", out_csv, "Output CSV filename (default: <dataset>_pgm_disk_multithread.csv)");
+
+    CLI11_PARSE(app, argc, argv);
+
+    if (max_exp < 0) max_exp = 0;
+    if (repeat <= 0) repeat = 1;
+
+    std::string filename       = dataset_basename;
+    std::string query_filename = dataset_basename + ".query.bin";
     std::string file       = falcon::DATASETS + filename;
     std::string query_file = falcon::DATASETS + query_filename;
 
-    std::vector<KeyType> data    = load_data_pgm_safe<KeyType>(file, 200000000);
+    std::cout << "Loading data from: " << file << "\n";
+    std::vector<KeyType> data = load_data_pgm_safe<KeyType>(file, num_keys);
+
+    std::cout << "Loading queries from: " << query_file << "\n";
     std::vector<KeyType> queries = load_queries_pgm_safe<KeyType>(query_file);
-    
+
+    std::cout << "Building PGM index...\n";
     pgm::PGMIndex<KeyType, Epsilon, EpsilonRecur> index(data);
 
-    int data_fd;
-    if (use_direct){ data_fd = open(file.c_str(), O_RDONLY | O_DIRECT); }
-    else { data_fd = open(file.c_str(), O_RDONLY);}
+    int flags = O_RDONLY;
+#ifdef O_DIRECT
+    if (direct) flags |= O_DIRECT;
+#endif
+
+    int data_fd = open(file.c_str(), flags);
+    if (data_fd < 0 && direct) {
+        std::cerr << "open with O_DIRECT failed, retrying without O_DIRECT...\n";
+        data_fd = open(file.c_str(), O_RDONLY);
+    }
     if (data_fd < 0) {
         perror("open data file");
         return 1;
     }
 
-    std::string out_csv = dataset_basename + "_pgm_disk_multithread.csv";
+    if (out_csv.empty()) {
+        out_csv = dataset_basename + "_pgm_disk_multithread.csv";
+    }
+
     std::ofstream ofs(out_csv);
     if (!ofs.is_open()) {
         std::cerr << "Failed to open output csv: " << out_csv << "\n";
@@ -249,35 +347,34 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    ofs << "baseline,threads,latency,walltime,height,avg_IOs\n";
+    ofs << "baseline,threads,run_id,latency,walltime,height,avg_IOs\n";
 
     for (int exp = 0; exp <= max_exp; exp++) {
         int threads = 1 << exp;
-        double avg_latency = 0;
-        double avg_wall    = 0;
-        size_t avg_IOs     = 0;
-        size_t height      = 0;
 
-        for (int t = 0; t < 3; t++) {
+        for (int r_id = 0; r_id < repeat; r_id++) {
             BenchmarkResult r = run_experiment(queries, index, data_fd, threads);
-            avg_latency = r.avg_lat;
-            avg_wall    = r.total_time;
-            avg_IOs     = r.data_IOs;
-            height      = r.height;
-            // double mem_time_s = r.index_cpu_ns / 1e9;
-            // double io_time_s  = r.io_wait_ns   / 1e9;
-            std::cout << "threads=" << threads
-                      << ", avg_latency=" << avg_latency << " ns"
-                      << ", wall=" << avg_wall << " s"
-                      << ", IOs=" << avg_IOs
-                      << ", height=" << height << std::endl;
 
-            ofs << baseline << "," << threads << "," << avg_latency << "," << avg_wall
-                << "," << height << "," << avg_IOs << "\n";
+            std::cout << "threads=" << threads
+                      << ", run=" << (r_id + 1) << "/" << repeat
+                      << ", avg_latency=" << r.avg_lat << " ns"
+                      << ", wall=" << r.total_time << " s"
+                      << ", IOs=" << r.data_IOs
+                      << ", height=" << r.height << "\n";
+
+            ofs << baseline << ","
+                << threads << ","
+                << r_id << ","
+                << r.avg_lat << ","
+                << r.total_time << ","
+                << r.height << ","
+                << r.data_IOs << "\n";
         }
     }
 
     ofs.close();
     close(data_fd);
+
+    std::cout << "Results written to: " << out_csv << "\n";
     return 0;
 }

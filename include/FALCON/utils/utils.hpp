@@ -7,7 +7,7 @@
 #include <iostream>
 #include "include.hpp"
 
-// 加载数据
+// load data
 std::vector<KeyType> load_data(const std::string& filename, size_t total_keys) {
     std::ifstream infile(filename, std::ios::binary);
     if (!infile) {
@@ -24,7 +24,7 @@ std::vector<KeyType> load_data(const std::string& filename, size_t total_keys) {
     return keys;
 }
 
-// 加载查询
+// load queries
 std::vector<KeyType> load_queries(const std::string& filename) {
     std::ifstream infile(filename, std::ios::binary);
     infile.seekg(0, std::ios::end);
@@ -90,8 +90,6 @@ std::vector<falcon::RangeQ> load_ranges(const std::string& filename) {
     return queries;
 }
 
-
-// 提取 key
 uint64_t extract_key(const char* record) {
     uint64_t key;
     std::memcpy(&key, record, sizeof(uint64_t));
@@ -160,13 +158,10 @@ std::vector<falcon::RangeQ> load_ranges_pgm_safe(const std::string& filename) {
     while (in.read(reinterpret_cast<char*>(&q), sizeof(falcon::RangeQ))) {
         ++total;
 
-        // 跳过包含 SENTINEL 的区间（lo 或 hi 任一为哨兵值）
         if (q.lo == SENTINEL || q.hi == SENTINEL) {
             ++skipped_sentinel;
             continue;
         }
-
-        //（可选）保证 lo <= hi，如果你的生成脚本已经保证这一点，可以删掉
         if (q.lo > q.hi) {
             std::swap(q.lo, q.hi);
         }

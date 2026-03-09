@@ -230,9 +230,11 @@ Our estimation framework predicts the average number of physical page I/Os per q
 - query workload (point, range).
 
 At a high level:
+
 $$
 Cost = (1-h)\times DAC
 $$
+
 where
 - $h$ is the estimated buffer hit ratio,
 - $DAC$ is the estimated data access cost computed from the learned index behavior. 
@@ -243,14 +245,17 @@ The hit ratio is estimated using Che’s approximation for LRU caching.
 **1. Memory decomposition**
 For each $\epsilon$, the function computes:
 - index size:
+
 $$
 M_{index}=\frac{n\cdot seg_size}{2\epsilon}
 $$
 - Buffer size:
+
 $$
 M_{buffer}=M-M_{index}
 $$
 - Buffer capacity in pages:
+
 $$
 C=\frac{M_{buffer}}{ps}
 $$
@@ -275,17 +280,20 @@ sample_ratio(C, total_pages, q)
 This internally solves Che's characteristic time equation and returns the estimated hit ratio.
 
 **5. Final cost**
+
 $$
 Cost = (1-h)\cdot \mathbb{E}[DAC]
 $$
 
 ## 2.3. Range Query Cost Estimation
 **1.** True range boundaries are mapped to data positions.
+
 **2.** The expected Range DAC (RDAC) is computed via:
 ```python
 get_RDAC(rlo, rhi, epsilon, ipp)
 ```
 This function calculates the expected number of pages touched under bounded prediction error.
+
 **3.** Expected per-page request counts are computed using:
 ```python
 estimate_page_counts_from_range_queryfile(...)
@@ -295,6 +303,7 @@ This analytically distributes probability mass to:
 - boundary pages (fractional probability).
 
 **4.** The page distribution is normalized and passed to `sample_ratio(...)` to estimate the buffer hit ratio.
+
 **5.** Final cost:
 $$
 Cost = (1-h)\cdot\mathbb{E}[RDAC]
@@ -310,3 +319,285 @@ For a user-given candidate set of $\epsilon$, `getExpectedCostPerEpsilon()` and 
 
 and output the cost-$\epsilon$ curve for parameter tuning. The results are stored in `<workload>.log` by default. The directory of log files should be configured first in `utils/optimalEpsilon.py`.
 
+# 3. Benchmark
+
+
+## 3.1. FALCON Benchmark Suite Quickstart
+
+Before benchmarking, please make sure that the dataset and workload files are located in the configured directory. And use the command below to compile the benchmark binaries:
+
+```bash
+mkdir build
+cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j8
+```
+
+Run:
+
+```bash
+./falcon_bench --help
+./falcon_bench <subcommand> --help
+```
+
+#### Command Structure
+
+```bash
+./falcon_bench <subcommand> [options...]
+```
+
+Available subcommands:
+
+* `epsilon`  : vary epsilon values
+* `threads`  : vary thread count list
+* `batch`    : vary batch size list
+* `worker`   : vary producer/worker counts
+* `rangeEps` : vary epsilon for range queries
+* `rangeSig` : range query used to locate a single point (ordered workload)
+* `join`     : hybrid join benchmark
+
+
+#### Common Parameters
+
+Even though each subcommand has its own config struct, most share these meanings:
+
+* `--dataset <name>`: dataset basename (e.g., `books`, `fb`, `wiki_ts`)
+* `--keys <N>`: number of keys to load / build index on
+* `--memory <MB>`: memory budget for page buffer / cache (MB)
+* `--policy <none|fifo|lru|lfu>`: cache policy (case-insensitive). Internally mapped to `CachePolicy::{NONE,FIFO,LRU,LFU}` via transformer. FIFO/LRU/LFU correspond to sharded cache implementations.   
+
+
+#### Subcommand Reference + Examples
+
+**1) `epsilon` — Vary epsilon values (point workload)**
+
+**Options**
+
+* `--dataset <name>` **required**
+* `--keys <N>` **required**
+* `--epsilon <e1> <e2> ...` **required** (list)
+* `--memory <MB>` **required**
+* `--policy <none|fifo|lru|lfu>` optional (but you probably want it)
+
+**Example**
+
+```bash
+for memory in 10 20 40 60; do
+    ./falcon_bench epsilon --dataset books_10M_uint64_unique \
+                --keys 10000000 \
+                --epsilon 2 4 6 8 10 12 14 16 18 20 24 32 48 64 128\
+                --repeats 3 \
+                --memory $memory \
+                --policy LRU
+done
+```
+
+**2) `threads` — Vary thread counts**
+
+**Options**
+
+* `--dataset <name>` **required**
+* `--keys <N>` **required**
+* `--threads <t1> <t2> ...` **required** (list)
+* `--policy <none|fifo|lru|lfu>` optional
+* `--memory <MB>` optional
+
+**Example**
+
+```bash
+./falcon_bench threads --dataset books_200M_uint64_unique \
+                --keys 200000000 \
+                --threads 1 2 4 8 16 32 64 128 \
+                --repeats 3 \
+                --memory 0 \
+                --policy NONE
+```
+
+**3) `batch` — Vary batch sizes**
+
+**Options**
+
+* `--dataset <name>` **required**
+* `--keys <N>` **required**
+* `--batch <b1> <b2> ...` **required** (list)
+* `--memory <MB>` optional
+* `--policy <none|fifo|lru|lfu>` optional
+
+**Example**
+
+```bash
+./falcon_bench batch --dataset books_200M_uint64_unique \
+                --keys 200000000 \
+                --batch 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 \
+                --memory 0 \
+                --policy NONE
+```
+
+**4) `worker` — Vary workers & producers**
+
+**Options**
+
+* `--dataset <name>` **required**
+* `--keys <N>` **required**
+* `--workers <w1> <w2> ...` **required** (list)
+* `--producers <p1> <p2> ...` **required** (list)
+* `--memory <MB>` optional
+* `--policy <none|fifo|lru|lfu>` optional
+
+**Example**
+
+```bash
+./falcon_bench worker --dataset books_200M_uint64_unique \
+                --keys 200000000 \
+                --producers 1 2 4 8 16 32 64 128 \
+                --workers 1 2 4 8 16 32 64 128 \
+                --memory 0 \
+                --policy NONE
+```
+
+**5) `rangeEps` — Vary epsilon for range queries**
+
+**Options**
+
+* `--dataset <name>` **required**
+* `--keys <N>` **required**
+* `--epsilon <e1> <e2> ...` **required** (list)
+* `--memory <MB>` **required**
+* `--policy <none|fifo|lru|lfu>` optional
+
+**Example**
+
+```bash
+for memory in 10 20 40 60; do
+    ./falcon_bench rangeEps --dataset books_10M_uint64_unique \
+                --keys 10000000 \
+                --epsilon 2 4 6 8 10 12 14 16 18 20 24 32 48 64 128 \
+                --memory $memory \
+                --policy LRU
+done
+```
+
+**6) `rangeSig` — Range-to-single-point (ordered query file)**
+
+This is intended for an **ordered** query workload; your help string says so.
+
+**Options**
+
+* `--dataset <name>` **required**
+* `--keys <N>` **required**
+* `--query <filename>` **required**
+* `--memory <MB>` **required**
+* `--policy <none|fifo|lru|lfu>` optional
+
+**Example**
+
+```bash
+./falcon_bench rangeSig --dataset books_200M_uint64_unique \
+            --keys 200000000 \
+            --query books_200M_uint64_unique.1Mtable5.bin \
+            --memory 0 \
+            --policy NONE
+```
+
+**7) `join` — Hybrid join benchmark**
+
+**Options**
+
+* `--dataset <name>` **required**
+* `--keys <N>` **required**
+* `--query <filename>` **required**
+* `--memory <MB>` **required**
+* `--policy <none|fifo|lru|lfu>` optional
+
+**Example**
+
+```bash
+./falcon_bench join --dataset books_200M_uint64_unique \
+            --keys 200000000 \
+            --query books_200M_uint64_unique.1Mtable5 \
+            --memory 0 \
+            --policy NONE
+```
+
+## 3.2. Benchmark for Baselines
+
+To evaluate the performance of different disk-based index baselines, we provide a unified benchmarking script `/experiments/run/examples/baseline_bench.sh`. This script automatically runs all baseline experiments used in our evaluation, including both point queries and range queries for PGM-disk, AULID and B+Tree.
+
+The script sequentially invokes the corresponding benchmark programs:
+
+- pgm_disk_test
+
+- pgm_disk_range_test
+
+- aulid_test
+
+- aulid_range_test
+
+- bplustree_test
+
+- bplustree_range_test
+
+Each program measures multi-threaded query performance under different thread counts and repeats the experiment multiple times to obtain stable results. The outputs are automatically written to CSV files for later analysis.
+
+Users can simply execute the provided script to run all baseline experiments:
+
+```bash
+bash baseline_bench.sh
+```
+
+The dataset name, number of keys, maximum thread exponent, and repeat count can be configured at the beginning of the script.
+
+
+## 3.3 Page Fetch Strategy Test
+This benchmark evaluates the performance difference between two **page fetch strategies** when using a PGM-index to locate keys on disk.
+
+The benchmark measures how different strategies fetch candidate pages predicted by the PGM index and evaluates the resulting **query throughput (QPS)** under multi-threaded workloads.
+
+#### Program Usage
+
+```bash
+pgm_fetch_test \
+    --data <dataset_file> \
+    --queries <query_file> \
+    [--strategy all|one] \
+    [--threads N] \
+    [--io psync|libaio|uring] \
+    [--direct 0|1]
+```
+
+#### Parameters
+
+|Option	|Description|
+| -- | -- |
+|--data	|dataset file (required)|
+|--queries	|query workload file|
+|--strategy	|page fetch strategy (all or one)|
+|--threads	|number of worker threads|
+|--io	|I/O backend (psync, libaio, uring)|
+|--direct	|enable O_DIRECT (1 = on)|
+
+#### Automated Experiment Script
+
+We provide a script that runs multiple experiments automatically in `experiments/run/examples/strategy_test.sh`. The script varies different parameters and runs the benchmark multiple times. Then the script computes mean QPS and standard deviation for each parameter combination.
+
+**Script Usage**
+
+Run:
+
+```bash
+bash strategy_test.sh
+```
+
+Script configuration:
+
+```bash
+BIN="./page_fetch_test"
+
+DATA=".../books_200M_uint64_unique"
+QUERIES=".../books_200M_uint64_unique.1Kquery.bin"
+
+STRATEGIES=("all" "one")
+THREADS=(1 4 16 64 256)
+REPEAT=10
+...
+```
